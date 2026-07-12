@@ -20,7 +20,7 @@ check $? "emits valid SessionStart additionalContext JSON"
 case "$OUT" in *systemMessage*) check 1 "no systemMessage (model-only)";; *) check 0 "no systemMessage (model-only)";; esac
 
 # 3) key content present
-case "$CTX" in *"audit:"*) check 0 "labelled 'audit:'";; *) check 1 "labelled 'audit:'";; esac
+case "$CTX" in *"audit-loose-ends:"*) check 0 "labelled 'audit-loose-ends:'";; *) check 1 "labelled 'audit-loose-ends:'";; esac
 LC="$(printf '%s' "$CTX" | tr 'A-Z' 'a-z')"
 case "$LC" in *redundant*orphaned*) check 0 "names redundant/orphaned drift";; *) check 1 "names redundant/orphaned drift";; esac
 case "$CTX" in *"waypoints done <id>"*) check 0 "references the waypoints CLI";; *) check 1 "references the waypoints CLI";; esac

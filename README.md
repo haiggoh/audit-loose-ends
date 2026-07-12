@@ -1,4 +1,4 @@
-# audit
+# audit-loose-ends
 
 A Claude Code plugin that reconciles your **durable records** at the end of a task or session, so
 nothing is left **redundant, orphaned, or falsely flagged as to-do when it's already done**. A
@@ -8,7 +8,7 @@ SessionStart nudge keeps the rule in view; a bundled skill holds the full proced
 
 Storing progress isn't enough — the *records* of it drift. A finished task stays flagged "pending"
 in a memory; a note describes a plan that already shipped; a follow-up never gets tracked. Left
-alone, a future session (or a startup banner) re-surfaces settled ground as if it were open. `audit`
+alone, a future session (or a startup banner) re-surfaces settled ground as if it were open. `audit-loose-ends`
 is the recurring end-of-task pass that keeps records honest.
 
 ## What it does
@@ -27,18 +27,18 @@ are clean.
 
 ## Relationship to the siblings
 
-- **waypoints** — *stores* the open items; `audit` *maintains* that store (one of the surfaces it
+- **waypoints** — *stores* the open items; `audit-loose-ends` *maintains* that store (one of the surfaces it
   reconciles). waypoints saves; audit checks.
-- **no-hidden-changes** — reconciles a *rule* against your setup **once, at first run**; `audit`
+- **no-hidden-changes** — reconciles a *rule* against your setup **once, at first run**; `audit-loose-ends`
   reconciles your *records* **recurringly, at wrap-up**. Same verb family, different trigger + target.
-- **resume-interrupted** — recovers an *accidentally* cut-off session; `audit` tidies the records of
+- **resume-interrupted** — recovers an *accidentally* cut-off session; `audit-loose-ends` tidies the records of
   a *deliberately* concluded one.
 
 ## Install
 
 ```
 /plugin marketplace add haiggoh/claude-code-desktop-sync
-/plugin install audit@haiggoh
+/plugin install audit-loose-ends@haiggoh
 ```
 
 ## Optional / disabling
