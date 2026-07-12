@@ -1,6 +1,6 @@
 ---
 name: audit-loose-ends
-description: Use to reconcile durable records at the end of a task or session so nothing is left stale — invoke when the user signals a wrap-up ("wrap", "wrap up", "audit", "tidy up", "let's close out"), or whenever a session has created or changed durable records (memories, project notes, reminders/crons, the task list, or the waypoints store) and you're about to stop. Scans those surfaces for anything redundant, orphaned, or falsely still-flagged as to-do when it's actually done, and fixes it.
+description: Use to reconcile durable records at the end of a task or session so nothing is left stale — invoke when the user signals a wrap-up ("wrap up", "audit", "tidy up", "let's close out"), or whenever a session has created or changed durable records (memories, project notes, reminders/crons, the task list, or the waypoints store) and you're about to stop. Scans those surfaces for anything redundant, orphaned, or falsely still-flagged as to-do when it's actually done, and fixes it.
 ---
 
 # audit — reconcile durable records so nothing goes stale
@@ -16,7 +16,7 @@ whether a *rule* contradicts your setup. This one is *recurring* and reconciles 
 ## When it applies
 
 Trigger when **either**:
-- the user signals a wrap-up — "wrap", "wrap up", "audit", "tidy up", "close out" — **or**
+- the user signals a wrap-up — "wrap up", "audit", "tidy up", "close out" — **or**
 - this session **created or changed durable records** (memories, project notes, reminders/crons, the
   task list, or the waypoints store), especially work that **completed** something a record still
   flags as pending.

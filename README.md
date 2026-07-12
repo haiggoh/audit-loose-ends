@@ -15,7 +15,7 @@ is the recurring end-of-task pass that keeps records honest.
 
 At session start it injects a **model-only** one-line reminder (no user-facing banner). The reminder
 fires the reconciliation when:
-- you signal a wrap-up — "wrap", "wrap up", "audit", "tidy up", "close out" — or
+- you signal a wrap-up — "wrap up", "audit", "tidy up", "close out" — or
 - the session **created or changed durable records** (memories, project notes, reminders/crons, the
   task list, or the [`waypoints`](https://github.com/haiggoh/waypoints) store).
 
