@@ -37,7 +37,7 @@ are clean.
 ## Install
 
 ```
-/plugin marketplace add haiggoh/claude-code-desktop-sync
+/plugin marketplace add haiggoh/get-haiggoh
 /plugin install audit-loose-ends@haiggoh
 ```
 
