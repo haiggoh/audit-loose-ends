@@ -1,0 +1,93 @@
+#!redact-secret-corpus v1
+#
+# The scan corpus for redact-secret.py --self-test. This file is DECLARED test
+# data by the magic line above, so the scanner reports it as SKIPPED rather than
+# scanning it -- visibly, in its output, and only until you pass
+# --no-corpus-skip. It is never silently excluded.
+#
+# Two rules for editing it:
+#
+#   1. MUST-MATCH holds SYNTHETIC values only. Never paste a live credential
+#      here: this is the one section a real key could hide in, because it is
+#      supposed to look like keys.
+#   2. MUST-NOT-MATCH is self-policing. Anything credible you put here FAILS the
+#      self-test as a false positive, so a real key cannot hide in this section.
+#
+# One sample per line. Blank lines and lines whose first non-space character is
+# '#' are ignored. Leading whitespace inside a sample is preserved.
+#
+# Key SHAPES are written as TEMPLATES, never as literal key-shaped runs, and the
+# loader expands them deterministically before scanning:
+#
+#     {A:n}  n chars of mixed-case alphanumeric   {D:n}  n digits
+#     {U:n}  n uppercase alphanumeric             {H:n}  n lowercase hex
+#     {L:n}  n lowercase letters
+#
+# This is not cosmetic. GitHub push protection REJECTED this file when the shapes
+# were literal -- it read the synthetic sk_live_ and xoxb- fixtures as a live
+# Stripe and Slack key. Templates also mean this file cannot physically hold a
+# leaked credential, and tests/test_redact_secret.sh enforces that by scanning it
+# with --no-corpus-skip and requiring zero token hits.
+
+# ============================== MUST-MATCH ==============================
+# Every documented credential shape. A miss here is a FALSE NEGATIVE -- a real
+# key the sweep would have walked straight past.
+sk-ant-api03-{A:95}
+sk-ant-sid01-{A:95}
+sk-proj-{A:48}
+sk-svcacct-{A:30}
+sk-{A:48}
+sk-{L:40}
+sk_live_{A:24}
+sk_test_{A:24}
+sk-or-v1-{H:64}
+ghp_{A:36}
+gho_{A:36}
+github_pat_11{A:22}_{A:59}
+ghs_{A:36}
+AKIA{U:16}
+ASIA{U:16}
+AIza{A:35}
+glpat-{A:20}
+hf_{A:34}
+xoxb-{D:13}-{D:13}-{A:24}
+password="{A:16}"
+DB_PASSWORD=hunter2Hunter2!
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.{A:24}
+api_key: {A:26}
+# ============================ MUST-NOT-MATCH ============================
+# Seeded with the ACTUAL hits improvised greps produced across several sessions.
+# A hit here is a FALSE POSITIVE -- noise that trains us to stop believing the
+# scan, which is how a real key gets missed.
+
+task-specific guidance for the operator role
+the on-disk-cache-directory-name is stable
+--password
+--password-file
+pass --secret - on stdin instead
+ANTHROPIC_AUTH_TOKEN=local
+CLAUDE_CODE_MAX_OUTPUT_TOKENS=8192
+risk-budgets-2026-03-13
+ask-taste-questions-up-front
+disk-usage-monitoring-2026-08
+sk-prefixed-keys-are-recognizable-by-shape
+a sk_or_similar_prefixed_lowercase_slug_here
+AKIAIOSFODNN7EXAMPLE
+sk-ant-api03-REDACTEDxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+sk-REDACTEDxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+ghp_REDACTEDxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+api_key = sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+password: <redacted>
+secret_key = ${SECRET_KEY}
+api_key: /path/to/key.txt
+token=$(cat ~/.token)
+auth_token: {{ vault_token }}
+password = changeme
+the bearer token goes in the header
+max_tokens: 8192
+the model-deletion passes: 'what about devstral, do we also have one'
+worth folding into the same pass: BackupViewModel.swift:88 accesses self
+    secret = read_secret(args)
+api_key = os.environ['API_KEY']
+secret=REDACTED
+credentials: required

@@ -41,7 +41,21 @@ Scan each surface and fix drift before closing:
    finished items done (`waypoints done <id>`); **add genuinely-open follow-ups** you'd not want to
    lose as new waypoints (`waypoints add "…" [--surface-on YYYY-MM-DD]`).
 6. **Repos touched this session**: committed and clean? Nothing left uncommitted or accidentally
-   pushed to a public surface?
+   pushed to a public surface? For the credential half of that question, run the scanner that ships
+   with this plugin — **never hand-roll a `grep`**:
+
+   ```sh
+   "$CLAUDE_PLUGIN_ROOT/scripts/redact-secret.py" --scan-only [--explain-filtered] FILE...
+   ```
+
+   An improvised pattern (`grep -inE "sk-[A-Za-z0-9]{8}|password|bearer"`) has no word-boundary, no
+   shape test and no value test, so it flags `task-specific`, `on-disk-cache`, `--password` as a flag
+   *name* and `MAX_OUTPUT_TOKENS=8192` — and a real key hides among them. The scanner applies five
+   layers (boundary → vendor shape → entropy → assignment-not-keyword → value sanity), never
+   suppresses silently (`--explain-filtered` shows every near-miss and why), writes nothing under
+   `--scan-only`, and carries a `--self-test` corpus so its no-false-negative property is verified
+   rather than asserted. `password=`/`token=` hits are report-only unless you pass
+   `--include-assignments`. It walks no directories: name the files you touched.
 
 ### Hybrid discovery (agent-side, here — never in a startup hook)
 While reconciling, sweep memories/notes for pending markers (`⏳`, `REMAINING`, `TODO`) that aren't

@@ -26,4 +26,12 @@ case "$LC" in *redundant*orphaned*) check 0 "names redundant/orphaned drift";; *
 case "$CTX" in *"waypoints done <id>"*) check 0 "references the waypoints CLI";; *) check 1 "references the waypoints CLI";; esac
 case "$CTX" in *"NOT length-based"*) check 0 "states the non-length trigger";; *) check 1 "states the non-length trigger";; esac
 
+# the secret-sweep pointer must carry a RESOLVED absolute path (not the literal
+# variable name) and must reach a file that actually exists
+case "$CTX" in *'$PLUGIN_ROOT'*) check 1 "pointer path is resolved, not literal";; *) check 0 "pointer path is resolved, not literal";; esac
+SCANPATH="$(printf '%s' "$CTX" | sed -n 's|.*`\(/[^`]*redact-secret.py\) --scan-only.*|\1|p')"
+[ -n "$SCANPATH" ] && [ -f "$SCANPATH" ]
+check $? "pointer names an existing redact-secret.py ($SCANPATH)"
+case "$CTX" in *"hand-roll"*) check 0 "warns against hand-rolling a grep";; *) check 1 "warns against hand-rolling a grep";; esac
+
 [ "$fail" = 0 ] && echo "ALL PASS" || { echo "FAILURES"; exit 1; }
