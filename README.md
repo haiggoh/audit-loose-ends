@@ -22,7 +22,8 @@ fires the reconciliation when:
 It is **not length-based**: a long read-only task needs no audit; a short task that closed a tracked
 to-do does. The procedure (in `skills/audit/SKILL.md`) scans each surface, distinguishes a
 *historical completion record* (keep) from a *stale pending flag* (fix), marks finished items done
-(`waypoints done <id>`), captures genuinely-open follow-ups as waypoints, and confirms touched repos
+(`waypoints.py done <id>`), prunes the closed pile into the archive, captures genuinely-open
+follow-ups as waypoints, and confirms touched repos
 are clean.
 
 ### The secret sweep (`scripts/redact-secret.py`)

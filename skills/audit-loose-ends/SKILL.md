@@ -38,8 +38,37 @@ Scan each surface and fix drift before closing:
 3. **Reminders / crons / scheduled tasks**: still needed, or fired-and-forgotten?
 4. **Task list** (the session task tracker): anything stuck pending/in-progress that's actually done?
 5. **The waypoints store** (`~/.claude/waypoints.json`, if the `waypoints` plugin is present): mark
-   finished items done (`waypoints done <id>`); **add genuinely-open follow-ups** you'd not want to
-   lose as new waypoints (`waypoints add "…" [--surface-on YYYY-MM-DD]`).
+   finished items done (`waypoints.py done <id>`); **add genuinely-open follow-ups** you'd not want to
+   lose as new waypoints (`waypoints.py add "…" [--surface-on YYYY-MM-DD]`). Then **prune** — see below.
+
+   **Pruning is part of the routine reconciliation, not an extra.** `done` leaves an item in the
+   LIVE store (hidden from the banner but still loaded, counted and paginated with the open work);
+   only `waypoints.py prune` moves the closed pile into the archive. Skip it and the live store
+   grows a tail of finished items forever — which is the same defect this skill exists to fix, one
+   layer down: a record that is technically accurate and practically in the way.
+
+   ```sh
+   waypoints.py prune          # MOVES every done item to the archive; nothing is destroyed
+   waypoints.py archive list   # the paper trail, still readable and restorable
+   ```
+
+   Prune **after** you have finished marking things done, so one pass sweeps the whole session's
+   closures. It is safe by construction: archived items stay readable and `waypoints.py reopen <id>`
+   brings one back in one step. If the count looks wrong afterwards, `waypoints.py journal` says
+   which command moved what.
+
+   **SOFT DEPENDENCY — probe, never assume.** This skill must work unchanged on a machine that
+   does not have waypoints, so do not run any `waypoints.py` command until you have confirmed it
+   is there. One check, and no output means not installed → skip step 5 entirely and say nothing
+   about it:
+
+   ```sh
+   command -v waypoints.py >/dev/null 2>&1 && echo installed
+   ```
+
+   Do NOT substitute a hand-edit of `~/.claude/waypoints.json` when the CLI is absent — the file
+   is one JSON document, so a botched escape makes EVERY item unreadable at once. No CLI means
+   this step does not apply, full stop.
 6. **Repos touched this session**: committed and clean? Nothing left uncommitted or accidentally
    pushed to a public surface? For the credential half of that question, run the scanner that ships
    with this plugin — **never hand-roll a `grep`**:
@@ -65,7 +94,7 @@ banner, so the banner stays precise and false-positive-free.
 ## Finishing an item
 
 Marking something done means marking it done **in whichever surface holds it** — flip the memory's
-flag, tick the note, and `waypoints done <id>`. Don't leave the same completion recorded as open in
+flag, tick the note, and `waypoints.py done <id>`. Don't leave the same completion recorded as open in
 one place and done in another.
 
 ## The point

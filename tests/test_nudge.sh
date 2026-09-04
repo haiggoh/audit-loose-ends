@@ -23,7 +23,13 @@ case "$OUT" in *systemMessage*) check 1 "no systemMessage (model-only)";; *) che
 case "$CTX" in *"audit-loose-ends:"*) check 0 "labelled 'audit-loose-ends:'";; *) check 1 "labelled 'audit-loose-ends:'";; esac
 LC="$(printf '%s' "$CTX" | tr 'A-Z' 'a-z')"
 case "$LC" in *redundant*orphaned*) check 0 "names redundant/orphaned drift";; *) check 1 "names redundant/orphaned drift";; esac
-case "$CTX" in *"waypoints done <id>"*) check 0 "references the waypoints CLI";; *) check 1 "references the waypoints CLI";; esac
+# The CLI is `waypoints.py` (note the .py) -- the bare name is a different, extensionless
+# launcher that is NOT what the plugin puts on the Bash-tool PATH under that name.
+case "$CTX" in *"waypoints.py done <id>"*) check 0 "references the waypoints CLI";; *) check 1 "references the waypoints CLI";; esac
+case "$CTX" in *"waypoints.py prune"*) check 0 "names prune as part of the routine";; *) check 1 "names prune as part of the routine";; esac
+# Soft dependency: the nudge must tell the reader to PROBE, so a machine without waypoints is
+# unaffected rather than being told to run a command it does not have.
+case "$CTX" in *"command -v waypoints.py"*) check 0 "prune is gated on a probe";; *) check 1 "prune is gated on a probe";; esac
 case "$CTX" in *"NOT length-based"*) check 0 "states the non-length trigger";; *) check 1 "states the non-length trigger";; esac
 
 # the secret-sweep pointer must carry a RESOLVED absolute path (not the literal
