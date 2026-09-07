@@ -349,6 +349,16 @@ check("padding-here" not in nl, "and not the head of the command")
 eq(A.condense("git-commit", "cd ~/thing && x" + " " * A.RAW_CMD_KEEP + 'git commit -m "Late subject"'),
    "thing: Late subject", "the repo name still comes from the retained head")
 
+# ...and it must survive alongside a COMMIT SUBJECT. condense() cuts the stored value at the subject
+# marker, so a match window appended after that marker is invisible. Both earlier fixtures happened
+# to contain no commit, which is why a real ship one-liner still displayed its head after the fix.
+BOTH = ("cd ~/thing && git commit -q -F - <<'MSG'\nShip it\nMSG\n" + "echo padding-here && " * 60
+        + "claude plugin update audit-loose-ends")
+both = cmds([rec_bash(BOTH)], "plugin")[0]
+check("claude plugin update audit-loose-ends" in both,
+      f"a late match survives alongside a commit subject (got {both!r})")
+eq(cmds([rec_bash(BOTH)], "git-commit"), ["thing: Ship it"], "and the subject is still recovered")
+
 print("== `git tag` with no operand LISTS tags ==")
 for cmd in ("git tag", "git tag | tail -3", "cd ~/r; git tag | head", "git tag -l 'v*'"):
     eq(cmds([rec_bash(cmd)], "git-tag"), [], f"a listing is not a tag creation: {cmd}")

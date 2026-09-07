@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.5.5] — 2026-09-07
+
+### Fixed
+- **The match window is now placed BEFORE the subject marker.** `condense()` cuts the stored value at
+  that marker, so the window appended after it was never read — 0.5.3 and 0.5.4 both looked applied
+  and a real ship one-liner still displayed its head. Both earlier fixtures happened to contain no
+  commit, so nothing in the suite exercised the combination; the test now covers a late match *and* a
+  commit subject in the same command, which is the shape every ship command in this repo has.
+
+  Worth naming as a pattern rather than a one-off: three consecutive releases fixed a real cause of
+  the same visible symptom, and each fix was verified against a fixture that isolated it. Isolating
+  the cause is what let the next cause hide. What finally settled it was reproducing the digest's own
+  offending line from the transcript and reading the stored value directly, rather than adding one
+  more fixture.
+
 ## [0.5.4] — 2026-09-07
 
 ### Fixed

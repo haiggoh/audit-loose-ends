@@ -590,7 +590,7 @@ class Scan:
             return
         probe = shell_only(cmd)
         subj = _subject_of(cmd)
-        stored = probe[:RAW_CMD_KEEP] + (SUBJ_MARK + " ".join(subj.split())[:200] if subj else "")
+        subj_tail = SUBJ_MARK + " ".join(subj.split())[:200] if subj else ""
         if AUTOMATION_READONLY.search(probe):
             self.readonly_automation += 1
         for cat, pat in CMD_PATTERNS:
@@ -604,10 +604,12 @@ class Scan:
                 # to the head -- which is how a `claude plugin update` entry ended up showing the
                 # `python3 - <<PY` that opened the same line. The head is kept for the leading `cd`
                 # (that is where the repo name comes from), and the match window is appended.
+                code = probe[:RAW_CMD_KEEP]
                 if m.end() > RAW_CMD_KEEP:
-                    self.cmds[cat].append(stored + "\n" + probe[m.start():m.start() + MAX_CMD + 40])
-                else:
-                    self.cmds[cat].append(stored)
+                    code += "\n" + probe[m.start():m.start() + MAX_CMD + 40]
+                # The subject tail goes LAST: condense() cuts the value at the marker, so anything
+                # appended after it is invisible -- which is where the match window was going.
+                self.cmds[cat].append(code + subj_tail)
 
     def run(self):
         with open(self.path, "r", encoding="utf-8", errors="replace") as fh:
