@@ -316,13 +316,19 @@ def condense(cat, cmd):
     # end: dogfooding showed `claude plugin update` entries displayed as the `git add && git commit`
     # that happened to open the same line, and destructive entries showing a `mktemp` instead of the
     # `rm`. The entry was true and the evidence shown for it was somebody else's.
-    one = " ".join(cmd.split(SUBJ_MARK)[0].split())
+    # Locate the match BEFORE flattening. The anchor accepts a newline as a command position, so
+    # flattening first removes the very character that makes a match possible -- which silently
+    # undid the 0.5.3 fix for any command whose operative call began a line rather than following
+    # an `&&`, and sent the display back to the head.
+    raw = cmd.split(SUBJ_MARK)[0]
     pat = CAT_PATTERNS.get(cat)
-    m = pat.search(one) if pat else None
+    m = pat.search(raw) if pat else None
     if m and m.start() > 0:
         # Step over the operator the anchor matched, so the fragment starts at the command itself.
-        head = one[m.start():].lstrip(" &|;`(")
+        # `split()` already drops leading whitespace, so only the operators need stripping.
+        head = " ".join(raw[m.start():].lstrip("&|;`( \t").split())
         return "… " + head[:MAX_CMD] + ("…" if len(head) > MAX_CMD else "")
+    one = " ".join(raw.split())
     return one[:MAX_CMD] + ("…" if len(one) > MAX_CMD else "")
 
 

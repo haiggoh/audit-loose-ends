@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.5.4] — 2026-09-07
+
+### Fixed
+- **The match is now located BEFORE the command text is flattened.** The anchor accepts a newline as
+  a command position, so flattening first removes the very character that makes a match possible.
+  That silently undid 0.5.3 for any command whose operative call *began a line* rather than following
+  an `&&` — including the shape that motivated 0.5.3 in the first place, a ship one-liner whose
+  `claude plugin update` sat on a later line. It was still displaying the head, and the fix looked
+  applied because the commands that happened to use `&&` had started rendering correctly.
+
+### Tests
+- A newline-anchored fixture, alongside the `&&` one. Mutation-tested: flattening before the search
+  is caught. A third candidate fix — stripping a leading newline from the fragment — turned out to be
+  dead code, since `split()` already drops it; removed rather than papered over with a test that
+  would have passed either way.
+
 ## [0.5.3] — 2026-09-07
 
 ### Fixed

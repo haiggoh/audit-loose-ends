@@ -338,6 +338,14 @@ far = cmds([rec_bash(FAR)], "plugin")[0]
 check("claude plugin update audit-loose-ends" in far,
       f"a match beyond the retention cap is still what gets shown (got {far!r})")
 check("padding-here" not in far, "and the retained head is not shown instead")
+# The anchor accepts a NEWLINE as a command position, so a call that begins its own line must be
+# found too -- and it is only findable before the text is flattened. This is the shape the digest
+# actually produced: a ship one-liner whose `claude plugin update` sat on a later line.
+NL = "cd ~/thing &&\n" + "echo padding-here\n" * 60 + "claude plugin update audit-loose-ends"
+nl = cmds([rec_bash(NL)], "plugin")[0]
+check("claude plugin update audit-loose-ends" in nl,
+      f"a match anchored on a NEWLINE past the cap is shown (got {nl!r})")
+check("padding-here" not in nl, "and not the head of the command")
 eq(A.condense("git-commit", "cd ~/thing && x" + " " * A.RAW_CMD_KEEP + 'git commit -m "Late subject"'),
    "thing: Late subject", "the repo name still comes from the retained head")
 
