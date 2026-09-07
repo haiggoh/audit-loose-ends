@@ -22,9 +22,17 @@ fires the reconciliation when:
 It is **not length-based**: a long read-only task needs no audit; a short task that closed a tracked
 to-do does. The procedure (in `skills/audit/SKILL.md`) scans each surface, distinguishes a
 *historical completion record* (keep) from a *stale pending flag* (fix), marks finished items done
-(`waypoints.py done <id>`), prunes the closed pile into the archive, captures genuinely-open
-follow-ups as waypoints, and confirms touched repos
-are clean.
+(`waypoints.py done <id>`), prunes the closed pile into the archive, **releases any `waiting`
+waypoint whose block is gone**, captures genuinely-open follow-ups as waypoints, and confirms
+touched repos are clean.
+
+Pruning and releasing are the same duty in two directions: pruning clears finished work *out* of
+the live store, releasing clears a false block *off* unfinished work. `waypoints.py resolve` does
+the mechanical half — it releases items whose target is `done` — but it reads the target's done
+flag, never the milestone written next to it. So the audit pass also reads `list --waiting` and
+judges each milestone by hand, releasing with `triage <id> --clear` when the milestone has landed
+even though its target has not. A waypoint parked on a condition that was met is presented as
+nothing-to-do while being ready to start, which is worse than a stale done-flag.
 
 ### The secret sweep (`scripts/redact-secret.py`)
 

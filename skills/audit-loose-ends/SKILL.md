@@ -39,7 +39,44 @@ Scan each surface and fix drift before closing:
 4. **Task list** (the session task tracker): anything stuck pending/in-progress that's actually done?
 5. **The waypoints store** (`~/.claude/waypoints.json`, if the `waypoints` plugin is present): mark
    finished items done (`waypoints.py done <id>`); **add genuinely-open follow-ups** you'd not want to
-   lose as new waypoints (`waypoints.py add "…" [--surface-on YYYY-MM-DD]`). Then **prune** — see below.
+   lose as new waypoints (`waypoints.py add "…" [--surface-on YYYY-MM-DD]`). Then **release whatever
+   is no longer waiting**, and finally **prune** — both below.
+
+   **Releasing `waiting` items is the same duty as pruning, pointed the other way.** Pruning clears
+   finished work out of the live store; releasing clears a *false block* off unfinished work. A
+   waypoint in the `waiting` tier is parked on another item in the store, and while it sits there it
+   is deliberately presented as nothing-for-you-to-do. If its condition has actually been met, that
+   presentation is now a lie of exactly the kind this skill exists to catch — worse than a stale
+   done-flag, because it hides work that is ready to start.
+
+   ```sh
+   waypoints.py resolve        # releases every waiting item whose target(s) have landed
+   waypoints.py list --waiting # what is still parked, and on what
+   ```
+
+   `resolve` is cheap, idempotent and safe to run every pass — run it even when you did not touch a
+   waiting item, because the release it performs may have been earned in an *earlier* session.
+   Released items come back **untriaged on purpose** (their own weight was never assessed while they
+   sat in `waiting`), so expect them to want a `waypoints.py triage <id> --tier …` verdict.
+
+   **Two things `resolve` cannot do — they are yours.** It keys purely on whether the target item is
+   `done`, so:
+
+   - **The milestone is descriptive, not evaluated.** A spec like `--waiting-on "some-id @ the
+     design doc lands"` releases only when `some-id` closes *entirely*, even though the milestone
+     itself may have been reached long ago. So read the milestone on each item in
+     `list --waiting` and ask whether *that* has happened. When it has, release the item yourself
+     with `waypoints.py triage <id> --clear` and say in the item why — the CLI cannot judge a
+     sentence, and this is the common case for a long-running target with several milestones.
+   - **Dangling targets are surfaced, not repaired.** `resolve` reports any waiting item pointing at
+     a target that no longer exists (renamed, or a mistyped id). It refuses to guess, because a
+     missing target is indistinguishable from the work having happened. That report is an orphaned
+     record and belongs to this pass: repoint it (`triage <id> --waiting-on "<real-id> @ …"`) or
+     clear the block, but never leave it dangling.
+
+   **Ordering: `done` → `resolve` → `prune`.** Closing an item is the event that earns a release, so
+   resolve after the closures. Prune last, and note that pruning first is not *wrong* — a target that
+   has moved to the archive still counts as landed — it is just a worse read of the same store.
 
    **Pruning is part of the routine reconciliation, not an extra.** `done` leaves an item in the
    LIVE store (hidden from the banner but still loaded, counted and paginated with the open work);
@@ -69,6 +106,11 @@ Scan each surface and fix drift before closing:
    Do NOT substitute a hand-edit of `~/.claude/waypoints.json` when the CLI is absent — the file
    is one JSON document, so a botched escape makes EVERY item unreadable at once. No CLI means
    this step does not apply, full stop.
+
+   The `waiting` tier and `resolve` arrived later than `done`/`prune`, so an older waypoints may
+   have the CLI but not the subcommand. Treat an unrecognised-command error from `resolve` as
+   "this store has no waiting tier, so there is nothing to release" — skip it and carry on with
+   the prune. Do not report it as a failure, and do not try to emulate it.
 6. **Repos touched this session**: committed and clean? Nothing left uncommitted or accidentally
    pushed to a public surface? For the credential half of that question, run the scanner that ships
    with this plugin — **never hand-roll a `grep`**:

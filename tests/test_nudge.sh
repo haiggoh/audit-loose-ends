@@ -27,6 +27,13 @@ case "$LC" in *redundant*orphaned*) check 0 "names redundant/orphaned drift";; *
 # launcher that is NOT what the plugin puts on the Bash-tool PATH under that name.
 case "$CTX" in *"waypoints.py done <id>"*) check 0 "references the waypoints CLI";; *) check 1 "references the waypoints CLI";; esac
 case "$CTX" in *"waypoints.py prune"*) check 0 "names prune as part of the routine";; *) check 1 "names prune as part of the routine";; esac
+# Releasing a falsely-parked `waiting` item is the mirror of pruning a done one, so the nudge must
+# name `resolve` -- and must not stop there: `resolve` keys only on the target's done flag, so the
+# reader has to be told to judge the MILESTONE by hand and how to release it when it has landed.
+case "$CTX" in *"waypoints.py resolve"*) check 0 "names resolve as part of the routine";; *) check 1 "names resolve as part of the routine";; esac
+case "$CTX" in *"list --waiting"*) check 0 "points at the waiting view for hand-judgement";; *) check 1 "points at the waiting view for hand-judgement";; esac
+case "$CTX" in *"triage <id> --clear"*) check 0 "gives the manual release command";; *) check 1 "gives the manual release command";; esac
+case "$CTX" in *MILESTONE*|*milestone*) check 0 "says the milestone is judged by the reader";; *) check 1 "says the milestone is judged by the reader";; esac
 # Soft dependency: the nudge must tell the reader to PROBE, so a machine without waypoints is
 # unaffected rather than being told to run a command it does not have.
 case "$CTX" in *"command -v waypoints.py"*) check 0 "prune is gated on a probe";; *) check 1 "prune is gated on a probe";; esac
