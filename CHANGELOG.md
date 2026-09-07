@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.5.2] — 2026-09-07
+
+### Fixed
+- **A raw-kept command is now shown from the MATCH, not from the head of the line.** The sections
+  the audit is meant to trust most — plugin installs, automation changes, destructive commands,
+  waypoints calls — print the command text itself, and a shell one-liner routinely carries the
+  operative call last. So `claude plugin update audit-loose-ends` appeared under the
+  `git add … && git commit …` that happened to open the same line, and a destructive entry showed a
+  `mktemp` where the reader was looking for the `rm`. Unlike 0.5.1's defects the *entry* was true;
+  the evidence printed beneath it belonged to a different command, which is its own way of being
+  wrong — a reader checking the digest against the session finds them disagreeing. The fragment is
+  marked `… ` so it is visibly mid-command, steps over the operator the anchor matched (otherwise
+  every entry reads `… && claude plugin update`), and is still capped.
+
+### Tests
+- 6 new assertions, mutation-tested 4/4. The operator step-over needed an exact-equality assertion
+  to be caught at all: an `in` check on the command still passed with the `&&` left on the front.
+
 ## [0.5.1] — 2026-09-07
 
 ### Fixed

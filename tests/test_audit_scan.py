@@ -304,6 +304,29 @@ marked = A.condense("waypoints", "waypoints.py list" + A.SUBJ_MARK + "a subject"
 check("audit-scan-subject" not in marked and "a subject" not in marked,
       f"the internal subject marker never reaches the digest (got {marked!r})")
 
+print("== a raw-kept command is shown FROM the match, not from its head ==")
+# A shell one-liner routinely carries the operative call last. Dogfooding showed `claude plugin
+# update` entries displayed as the `git add && git commit` that opened the same line: the entry was
+# true and the evidence printed under it belonged to a different command.
+TAIL = ("cd ~/thing && git add -- a b c && " + "echo padding && " * 12
+        + "claude plugin update audit-loose-ends")
+shown = cmds([rec_bash(TAIL)], "plugin")[0]
+check("claude plugin update audit-loose-ends" in shown, f"the matching call is visible (got {shown!r})")
+check(shown.startswith("… "), "and the fragment is marked as starting mid-command")
+check("git add" not in shown, "the unrelated head of the line is not what gets shown")
+# The anchor deliberately matches the OPERATOR before the command, so the fragment has to step over
+# it -- otherwise every such entry reads "… && claude plugin update", which looks like a fragment of
+# something rather than the command that ran.
+eq(shown, "… claude plugin update audit-loose-ends",
+   "the fragment starts at the command, not at the operator the anchor matched")
+# ...but a command that matches at its START must not gain a spurious leading ellipsis.
+eq(cmds([rec_bash("waypoints.py done thing")], "waypoints"), ["waypoints.py done thing"],
+   "a command matching at position 0 is shown verbatim")
+long_tail = cmds([rec_bash("cd ~/r && " + "echo x && " * 30 + "rm -rf /some/dir " + "y" * 900)],
+                 "destructive")[0]
+check(len(long_tail) <= A.MAX_CMD + 4, f"the from-the-match fragment is still capped ({len(long_tail)})")
+check("rm -rf /some/dir" in long_tail, "and it still contains the destructive call itself")
+
 print("== `git tag` with no operand LISTS tags ==")
 for cmd in ("git tag", "git tag | tail -3", "cd ~/r; git tag | head", "git tag -l 'v*'"):
     eq(cmds([rec_bash(cmd)], "git-tag"), [], f"a listing is not a tag creation: {cmd}")

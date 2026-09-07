@@ -1,6 +1,6 @@
 {
   "name": "audit-loose-ends",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "description": "At the end of a substantive task — or when you signal end-of-session — reconcile your durable records (memories, project notes, reminders, task list, and the waypoints store) so nothing is left redundant, orphaned, or falsely flagged as to-do when it's already done. A SessionStart nudge + a skill with the procedure. Companion to waypoints; sibling to resume-interrupted, no-hidden-changes, measure-twice.",
   "author": { "name": "Heiko Brantsch" },
   "homepage": "https://github.com/haiggoh/audit-loose-ends",

@@ -99,6 +99,8 @@ CMD_PATTERNS = [
                                r"waypoints(?:\.py)?\s+rm\s[^\n]*--delete)")),
 ]
 
+CAT_PATTERNS = dict(CMD_PATTERNS)
+
 # Read-only git plumbing. Recording `git status` as "git activity" would inflate every digest with
 # the one command that by definition changed nothing.
 AUTOMATION_READONLY = re.compile(
@@ -307,8 +309,20 @@ def condense(cat, cmd):
         m = _REL_RE.search(cmd)
         return (pre + f"gh release {m.group(1)} {m.group(2) or ''}".strip()) if m else pre + "gh release"
     # waypoints, automation, plugin, destructive: the command text IS the fact, so it is kept --
-    # but flattened and truncated here, since it was stored raw for the condensers above.
+    # but flattened and truncated here, since it was stored whole for the condensers above.
+    #
+    # Truncate from the MATCH, not from the start of the command. These sections are the ones the
+    # audit is supposed to trust, and a shell one-liner routinely carries the operative call at the
+    # end: dogfooding showed `claude plugin update` entries displayed as the `git add && git commit`
+    # that happened to open the same line, and destructive entries showing a `mktemp` instead of the
+    # `rm`. The entry was true and the evidence shown for it was somebody else's.
     one = " ".join(cmd.split(SUBJ_MARK)[0].split())
+    pat = CAT_PATTERNS.get(cat)
+    m = pat.search(one) if pat else None
+    if m and m.start() > 0:
+        # Step over the operator the anchor matched, so the fragment starts at the command itself.
+        head = one[m.start():].lstrip(" &|;`(")
+        return "… " + head[:MAX_CMD] + ("…" if len(head) > MAX_CMD else "")
     return one[:MAX_CMD] + ("…" if len(one) > MAX_CMD else "")
 
 
