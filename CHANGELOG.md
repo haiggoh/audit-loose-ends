@@ -1,5 +1,44 @@
 # Changelog
 
+## [0.5.1] — 2026-09-07
+
+### Fixed
+Four defects in `audit-scan.py`, all four found by dogfooding 0.5.0 — running the finished scanner
+on the very session that built it. Each one **fabricated** a fact rather than missing one, which in
+an audit is the worse failure: nothing in the digest tells a reader that an entry was invented.
+
+- **Prose in a quoted argument was read as shell code.** 0.5.0 stripped heredoc bodies, but the same
+  prose also arrives as `gh release create --notes "…"`, whose body is a changelog *describing the
+  commands being detected*. Because the start of a line counts as a command position, a changelog
+  line beginning `claude plugin update …` was reported as a plugin update that ran. `shell_only` now
+  also masks multi-line quoted data, quote-aware: `$( )` inside quotes is live code and is followed
+  as such, and a data region is blanked segment by segment — the runs between its quotes and any
+  substitution inside it — so `--notes "$(cmd "prose")"` loses the prose and keeps the `$(cmd`.
+  Same-line arguments are left alone; an unterminated quote treats the remainder as data, which
+  under-detects in data rather than over-detecting prose as commands.
+- **A long commit message truncated away the commands that followed it.** The *raw* command was
+  stored, so a 40-line message consumed the retention budget and the `git push` / `git tag` /
+  `gh release` after it were cut off — the digest printed `push` with no target and `tag ?` with no
+  version. What is stored is now the shell code, with the subject carried explicitly beside it.
+- **`git tag` with no operand is a listing.** `git tag | tail` changes nothing, yet it was reported
+  as a tag creation with `|` as the tag name. A tag operand is now required, and the listing is
+  counted as read-only git.
+- **`cd ~/ClaudeWorkspace;` produced the repo name `ClaudeWorkspace;`** — trailing shell punctuation
+  is now stripped.
+
+Found while fixing the above: `GIT_READONLY` carried a trailing `\b` on the whole alternation, so
+every alternative ending at `$` or a shell operator could never match — `git tag` and `git branch`
+were silently uncounted. Boundary placement, not vocabulary, and invisible in a passing suite
+because a read-only tally that is too low looks like a quiet session.
+
+### Tests
+- 15 new assertions covering all of the above, and **mutation-tested 11/11** on the new paths. Two
+  of those mutations initially came back NOT CAUGHT and both were the tests' fault, not the
+  mutations': one asserted `SUBJ_MARK not in output` when the marker begins with a newline, so
+  flattening the value passed it trivially; the other exercised only the closing half of a
+  two-sided rule. The `$( )` segment split is now tested from **both** sides — prose before the
+  substitution and prose after it — because either half alone leaves the false positive intact.
+
 ## [0.5.0] — 2026-09-07
 
 ### Added

@@ -49,7 +49,7 @@ PROJECTS_DIR = os.path.expanduser("~/.claude/projects")
 # Hard caps. A digest that can grow without bound defeats the entire purpose -- the failure mode
 # to design against is not "too little detail", it is silently reproducing the transcript.
 MAX_CMD = 160            # chars of any single quoted command, at DISPLAY time
-RAW_CMD_KEEP = 900       # chars of raw command retained so condense() can reach a
+RAW_CMD_KEEP = 900       # chars of SHELL CODE retained so condense() can reach a
                          # heredoc subject, which sits on the line AFTER the marker
 MAX_PROMPT = 400         # chars of a quoted user prompt
 MAX_PER_SECTION = 40     # distinct entries listed in any one section before it summarises
@@ -85,7 +85,10 @@ CMD_PATTERNS = [
     ("waypoints",  re.compile(_CMDPOS + r"waypoints(?:\.py)?\s+(?!--help|-h\b)\S+")),
     ("git-commit", re.compile(_CMDPOS + r"git\s[^\n|;&]*\bcommit\b")),
     ("git-push",   re.compile(_CMDPOS + r"git\s[^\n|;&]*\bpush\b")),
-    ("git-tag",    re.compile(_CMDPOS + r"git\s[^\n|;&]*\btag\s")),
+    # A tag OPERAND is required. `git tag` / `git tag | tail` LISTS tags and changes nothing;
+    # without this the digest reported a listing as a release tag, complete with `tag |` as the
+    # tag name -- a fabricated fact, which is worse in an audit than a missing one.
+    ("git-tag",    re.compile(_CMDPOS + r"git\s[^\n|;&]*\btag\s+(?:-\S+\s+)*[^\s|;&<>()'\"-]")),
     ("release",    re.compile(_CMDPOS + r"gh\s+release\s+\w+")),
     ("automation", re.compile(
         _CMDPOS + r"(?:launchctl\s+(?:bootstrap|bootout|load|unload|enable|disable|kickstart|"
@@ -102,8 +105,13 @@ AUTOMATION_READONLY = re.compile(
     _CMDPOS + r"(?:launchctl\s+(?:print|list|dumpstate|procinfo|examine)\b|"
     r"crontab\s+-l\b)")
 
-GIT_READONLY = re.compile(r"\bgit\b[^|;&]*\b(?:status|log|diff|show|rev-parse|rev-list|"
-                          r"branch\s*$|remote\s+-v|tag\s*$|tag\s+-l|tag\s+--list)\b")
+# NOTE the boundary placement: a trailing `\b` on the whole group is WRONG, because the
+# alternatives that end at `$` or at a shell operator have no word character to bound against, so
+# they silently never match. `git tag` and `git branch` went uncounted for exactly that reason.
+GIT_READONLY = re.compile(
+    r"\bgit\b[^|;&]*\b(?:(?:status|log|diff|show|rev-parse|rev-list|remote\s+-v)\b"
+    r"|(?:branch|tag)\s*(?:$|(?=[|;&>]))"
+    r"|tag\s+(?:-l\b|--list\b))")
 
 
 # macOS ships /tmp, /var and /etc as symlinks into /private. Claude Code records a tool argument
@@ -135,6 +143,13 @@ _HEREDOC_RE = re.compile(r"<<-?\s*'?[A-Za-z_][A-Za-z0-9_]*'?[^\n]*\n\s*(\S[^\n]*
 _PUSH_RE = re.compile(r"\bpush\b((?:\s+--?\S+)*)\s*(\S+)?\s*(\S+)?")
 _TAG_RE = re.compile(r"\btag\b(?:\s+-\S+)*\s+(\S+)")
 _REL_RE = re.compile(r"\bgh\s+release\s+(\w+)\s+(\S+)?")
+# What is stored per command is the SHELL CODE, with the commit subject appended under this marker.
+# Storing the raw command instead meant a 30-line commit message consumed the whole retention
+# budget and the operative `git push`/`git tag`/`gh release` that followed it was cut off -- the
+# digest then reported "push" with no target and "tag ?" with no version. Found by running this
+# scanner on the session that shipped it.
+SUBJ_MARK = "\n#audit-scan-subject# "
+_SUBJ_MARK_RE = re.compile(re.escape(SUBJ_MARK) + r"(.*)")
 
 
 _HEREDOC_OPEN_RE = re.compile(r"<<-?\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1")
@@ -143,6 +158,10 @@ _HEREDOC_OPEN_RE = re.compile(r"<<-?\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1")
 def shell_only(cmd):
     """The command with heredoc BODIES removed.
 
+    Prose reaches a command two ways -- as a heredoc body and as a long quoted argument -- so
+    this also runs `mask_prose`, and callers get one function that answers "which part of this was
+    actually shell code".
+
     A heredoc body is data, not shell code — and in this workflow it is usually a commit message,
     which is prose about the very tools being detected. Matching patterns against it is why a
     commit whose message mentioned `launchctl` was reported as having run launchctl. Stripping the
@@ -150,7 +169,7 @@ def shell_only(cmd):
     per-pattern. The body is still available to the subject extractor, which reads the raw command.
     """
     if "<<" not in cmd:
-        return cmd
+        return mask_prose(cmd)
     out = []
     lines = cmd.split("\n")
     i = 0
@@ -168,15 +187,96 @@ def shell_only(cmd):
         while i < len(lines) and lines[i].strip() != tag:
             i += 1
         i += 1  # drop the terminator line too
-    return "\n".join(out)
+    return mask_prose("\n".join(out))
+
+
+def mask_prose(cmd):
+    """The command with MULTI-LINE quoted DATA blanked out, quote-aware.
+
+    The heredoc pass above only covers prose delivered as a heredoc. The same prose also
+    arrives as a long quoted argument -- `gh release create --notes "..."`, whose body is a
+    changelog describing the very commands being detected. Because the anchor treats the start
+    of a line as a command position, a changelog line beginning "claude plugin update ..."
+    registered as an actual plugin update: two fabricated entries in the digest, found by
+    running this scanner on the session that built it.
+
+    Only regions spanning a NEWLINE are blanked, because those are the prose payloads; a short
+    same-line argument is left alone. `$(...)` inside double quotes is live code and is
+    followed as such, so masking never swallows a real command -- that nesting is exactly the
+    shape of the false positive, since the prose sat inside a substitution inside quotes.
+    """
+    if '"' not in cmd and "'" not in cmd:
+        return cmd
+    out = list(cmd)
+    i, n = 0, len(cmd)
+    # Frames: ["code"|"dq"|"sq", open_index, segment_start]. The bottom frame is shell code; a quote
+    # pushes a DATA frame, and `$(` inside a data frame pushes CODE back on top. A data frame is
+    # blanked SEGMENT by segment -- the runs between its quotes and any substitution inside it --
+    # so masking `--notes "$(cmd "prose")"` removes the prose without touching the `$(cmd` around it.
+    stack = [["code", 0, None]]
+
+    def blank(a, b):
+        for k in range(a, b):
+            if out[k] != "\n":
+                out[k] = " "
+
+    def close_seg(frame, end):
+        a = frame[2]
+        if a is not None and "\n" in cmd[a:end]:
+            blank(a, end)
+        frame[2] = None
+
+    while i < n:
+        c = cmd[i]
+        top = stack[-1]
+        if top[0] == "sq":
+            if c == "'":
+                close_seg(top, i)
+                stack.pop()
+        elif top[0] == "dq":
+            if c == "\\":
+                i += 2
+                continue
+            if cmd.startswith("$(", i):
+                close_seg(top, i)
+                stack.append(["code", i + 2, None])
+                i += 2
+                continue
+            if c == '"':
+                close_seg(top, i)
+                stack.pop()
+        else:
+            if c == "\\":
+                i += 1
+            elif c == "'":
+                stack.append(["sq", i, i + 1])
+            elif c == '"':
+                stack.append(["dq", i, i + 1])
+            elif c == ")" and len(stack) > 1:
+                stack.pop()
+                if stack[-1][0] in ("dq", "sq"):
+                    stack[-1][2] = i + 1      # data resumes after the substitution
+        i += 1
+    # An UNCLOSED region means a truncated command; treat the remainder as data, the same safe
+    # reading the heredoc pass uses -- better to under-detect in data than to report prose as a
+    # command that ran.
+    for frame in stack:
+        if frame[0] in ("dq", "sq"):
+            close_seg(frame, n)
+    return "".join(out)
 
 
 def _repo_of(cmd):
     m = _CD_RE.search(cmd)
-    return os.path.basename(m.group(1).rstrip("/")) if m else ""
+    # Trailing shell punctuation is not part of the directory name: `cd ~/ClaudeWorkspace;`
+    # was reported as the repo "ClaudeWorkspace;".
+    return os.path.basename(m.group(1).rstrip("/;&|\"'")) if m else ""
 
 
 def _subject_of(cmd):
+    m = _SUBJ_MARK_RE.search(cmd)
+    if m:
+        return m.group(1).strip()
     m = _MSG_Q_RE.search(cmd)
     if m:
         return m.group(2).strip().splitlines()[0]
@@ -208,7 +308,7 @@ def condense(cat, cmd):
         return (pre + f"gh release {m.group(1)} {m.group(2) or ''}".strip()) if m else pre + "gh release"
     # waypoints, automation, plugin, destructive: the command text IS the fact, so it is kept --
     # but flattened and truncated here, since it was stored raw for the condensers above.
-    one = " ".join(cmd.split())
+    one = " ".join(cmd.split(SUBJ_MARK)[0].split())
     return one[:MAX_CMD] + ("…" if len(one) > MAX_CMD else "")
 
 
@@ -469,13 +569,15 @@ class Scan:
             self.readonly_git += 1
             return
         probe = shell_only(cmd)
+        subj = _subject_of(cmd)
+        stored = probe[:RAW_CMD_KEEP] + (SUBJ_MARK + " ".join(subj.split())[:200] if subj else "")
         if AUTOMATION_READONLY.search(probe):
             self.readonly_automation += 1
         for cat, pat in CMD_PATTERNS:
             if pat.search(probe):
-                # Stored raw and generously capped: condense() needs the line structure, and the
-                # display truncation happens at report time instead.
-                self.cmds[cat].append(cmd[:RAW_CMD_KEEP])
+                # Stored as SHELL CODE plus the subject, generously capped: condense() needs the
+                # line structure, and the display truncation happens at report time instead.
+                self.cmds[cat].append(stored)
 
     def run(self):
         with open(self.path, "r", encoding="utf-8", errors="replace") as fh:

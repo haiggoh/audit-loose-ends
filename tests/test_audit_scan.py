@@ -241,6 +241,87 @@ check(len(long_subject) <= 200, f"a condensed commit line stays short (got {len(
 long_raw = A.condense("waypoints", "waypoints.py add \"" + "y" * 900 + "\"")
 check(len(long_raw) <= 200, f"a raw-kept command is truncated too (got {len(long_raw)})")
 
+# ------------------------------------------------- prose in a quoted argument (dogfooding fixes)
+
+# Everything in this section was found by running the finished scanner on the session that built
+# it. All four defects FABRICATED facts rather than missing them, which in an audit is the worse
+# failure: a reader has no way to tell an invented entry from a real one.
+
+print("== multi-line quoted prose is data, not shell code ==")
+NOTES = ('cd ~/r && gh release create v0.5.0 --notes "$(python3 -c "\n'
+         'print(1)\nclaude plugin update thing\nlaunchctl bootstrap gui/501 x.plist\n'
+         '")" && git push origin main')
+m = A.mask_prose(NOTES)
+check("claude plugin update" not in m, "prose inside a quoted --notes payload is masked")
+check("launchctl bootstrap" not in m, "so is automation named in that prose")
+check("gh release create v0.5.0" in m and "git push origin main" in m,
+      "the real commands around it survive")
+# The segment rule is what makes this work: a data frame is blanked BETWEEN its quotes and any
+# substitution inside it, so masking the prose does not swallow the `$(python3 -c` that produced it.
+check("python3 -c" in m, "a $( ) substitution inside the quotes is code and survives")
+# ...and the split has to happen at the OPENING of the substitution, not only at its close: prose
+# sitting BEFORE a `$( )` in the same quoted argument is otherwise never blanked, because the data
+# segment gets restarted after the substitution and the earlier run is forgotten.
+LEADING = ('gh release create v1 --notes "release notes:\n'
+           'claude plugin update thing\nbuilt $(date)\nend"')
+lm = A.mask_prose(LEADING)
+check("claude plugin update" not in lm, "prose BEFORE a substitution is masked too")
+check("$(date)" in lm, "and the substitution itself still survives")
+eq(cmds([rec_bash(LEADING)], "plugin"), [], "so it does not register as a plugin install")
+# The mirror of the same requirement: data has to RESUME after the substitution closes, or prose
+# following a `$( )` inside the same argument stays unmasked.
+TRAILING = 'gh release create v1 --notes "built $(date)\nlaunchctl bootstrap gui/501 x.plist\nend"'
+check("launchctl bootstrap" not in A.mask_prose(TRAILING), "prose AFTER a substitution is masked too")
+eq(cmds([rec_bash(TRAILING)], "automation"), [], "so it does not register as an automation change")
+eq(cmds([rec_bash(NOTES)], "plugin"), [], "a changelog mentioning `claude plugin update` is not an install")
+eq(cmds([rec_bash(NOTES)], "automation"), [], "...nor is one mentioning launchctl an automation change")
+check(bool(cmds([rec_bash(NOTES)], "release")), "but the release it actually performed IS reported")
+
+eq(A.mask_prose('git commit -m "short subject"'), 'git commit -m "short subject"',
+   "a SAME-LINE quoted argument is left alone")
+eq(A.mask_prose("echo hi"), "echo hi", "a command with no quotes is untouched")
+check("git tag -a v1" in A.mask_prose('git push origin main &&\n  git tag -a v1 -m "x"'),
+      "a command split over several LINES is code, not prose")
+check("launchctl bootstrap" not in A.mask_prose('echo "start\nlaunchctl bootstrap x'),
+      "an unterminated quote treats the remainder as data (under-detect in data, safely)")
+
+print("== a long commit message cannot truncate the operative commands away ==")
+# The original defect: the RAW command was stored, so a 30-line commit message ate the retention
+# budget and the `git push`/`git tag`/`gh release` after it were cut off. The digest then reported
+# `push` with no target and `tag ?` with no version -- entries that looked like findings.
+LONG = ("cd ~/thing && git commit -q -F - <<'MSG'\nShip the thing\n\n"
+        + "\n".join("body line %d that pads this message well past the retention cap" % i
+                    for i in range(40))
+        + "\nMSG\ngit push -q origin HEAD && git tag -a v0.9.0 -m x && gh release create v0.9.0")
+check(len(LONG) > A.RAW_CMD_KEEP, f"the fixture really does exceed the cap ({len(LONG)} chars)")
+eq(cmds([rec_bash(LONG)], "git-push"), ["thing: push origin HEAD"],
+   "the push target survives a message longer than the retention cap")
+eq(cmds([rec_bash(LONG)], "git-tag"), ["thing: tag v0.9.0"], "so does the tag name")
+eq(cmds([rec_bash(LONG)], "release"), ["thing: gh release create v0.9.0"], "so does the release")
+eq(cmds([rec_bash(LONG)], "git-commit"), ["thing: Ship the thing"],
+   "and the subject is still recovered, carried explicitly rather than re-parsed")
+marked = A.condense("waypoints", "waypoints.py list" + A.SUBJ_MARK + "a subject")
+check("audit-scan-subject" not in marked and "a subject" not in marked,
+      f"the internal subject marker never reaches the digest (got {marked!r})")
+
+print("== `git tag` with no operand LISTS tags ==")
+for cmd in ("git tag", "git tag | tail -3", "cd ~/r; git tag | head", "git tag -l 'v*'"):
+    eq(cmds([rec_bash(cmd)], "git-tag"), [], f"a listing is not a tag creation: {cmd}")
+s_ro = scan_records([rec_bash("cd ~/r; git tag | head")])
+eq(s_ro.readonly_git, 1, "and the listing is counted as read-only git rather than dropped")
+# Boundary placement, not vocabulary: with a trailing `\b` on the whole alternation, every
+# alternative ending at `$` or a shell operator can never match, because there is no word
+# character to bound against. `git tag` and `git branch` were silently uncounted.
+for cmd in ("git tag", "git branch", "git tag -l 'v*'"):
+    eq(scan_records([rec_bash(cmd)]).readonly_git, 1, f"counted read-only: {cmd}")
+for cmd in ("git tag -a v1 -m x", "git branch -D old"):
+    eq(scan_records([rec_bash(cmd)]).readonly_git, 0, f"NOT read-only: {cmd}")
+check(bool(cmds([rec_bash("git tag -a v1.0.0 -m x")], "git-tag")),
+      "an actual tag creation still fires")
+
+eq(A.condense("git-tag", "cd ~/ClaudeWorkspace/r; git tag -a v1 -m x"), "r: tag v1",
+   "trailing shell punctuation is not part of the repo name")
+
 # --------------------------------------------------------------------------- redaction
 
 print("== redaction ==")
