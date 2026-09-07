@@ -588,10 +588,20 @@ class Scan:
         if AUTOMATION_READONLY.search(probe):
             self.readonly_automation += 1
         for cat, pat in CMD_PATTERNS:
-            if pat.search(probe):
+            m = pat.search(probe)
+            if m:
                 # Stored as SHELL CODE plus the subject, generously capped: condense() needs the
                 # line structure, and the display truncation happens at report time instead.
-                self.cmds[cat].append(stored)
+                #
+                # The retained head must be guaranteed to CONTAIN this category's match. A long
+                # one-liner can push the matching call past the cap, and then the display falls back
+                # to the head -- which is how a `claude plugin update` entry ended up showing the
+                # `python3 - <<PY` that opened the same line. The head is kept for the leading `cd`
+                # (that is where the repo name comes from), and the match window is appended.
+                if m.end() > RAW_CMD_KEEP:
+                    self.cmds[cat].append(stored + "\n" + probe[m.start():m.start() + MAX_CMD + 40])
+                else:
+                    self.cmds[cat].append(stored)
 
     def run(self):
         with open(self.path, "r", encoding="utf-8", errors="replace") as fh:

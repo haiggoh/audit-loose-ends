@@ -327,6 +327,20 @@ long_tail = cmds([rec_bash("cd ~/r && " + "echo x && " * 30 + "rm -rf /some/dir 
 check(len(long_tail) <= A.MAX_CMD + 4, f"the from-the-match fragment is still capped ({len(long_tail)})")
 check("rm -rf /some/dir" in long_tail, "and it still contains the destructive call itself")
 
+# Third facet of the same truncation defect: the retained slice must be guaranteed to CONTAIN the
+# match, or the display falls back to the head and shows an unrelated command as the evidence.
+# The padding must be real shell CODE: heredoc bodies are stripped before the cap is applied, so a
+# fixture padded with a heredoc never exceeds it and the test passes without exercising anything.
+FAR = "cd ~/thing && " + "echo padding-here && " * 60 + "claude plugin update audit-loose-ends"
+check(len(A.shell_only(FAR)) > A.RAW_CMD_KEEP + A.MAX_CMD,
+      f"the fixture puts the match well past the cap ({len(A.shell_only(FAR))} chars of code)")
+far = cmds([rec_bash(FAR)], "plugin")[0]
+check("claude plugin update audit-loose-ends" in far,
+      f"a match beyond the retention cap is still what gets shown (got {far!r})")
+check("padding-here" not in far, "and the retained head is not shown instead")
+eq(A.condense("git-commit", "cd ~/thing && x" + " " * A.RAW_CMD_KEEP + 'git commit -m "Late subject"'),
+   "thing: Late subject", "the repo name still comes from the retained head")
+
 print("== `git tag` with no operand LISTS tags ==")
 for cmd in ("git tag", "git tag | tail -3", "cd ~/r; git tag | head", "git tag -l 'v*'"):
     eq(cmds([rec_bash(cmd)], "git-tag"), [], f"a listing is not a tag creation: {cmd}")

@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.5.3] — 2026-09-07
+
+### Fixed
+- **The retained slice of a command is now guaranteed to contain the match.** Third and last facet
+  of the truncation defect: 0.5.2 displays a raw-kept command from its match, but a long one-liner
+  can push the matching call past the retention cap, and with nothing left to match the display fell
+  back to the head — so a `claude plugin update` entry showed the `python3 - <<PY` that opened the
+  same line, exactly the misattribution 0.5.2 set out to remove. The head is still kept, because
+  that is where the leading `cd` and therefore the repo name come from; a window around the match is
+  appended to it.
+
+### Tests
+- The first version of this test was padded with a heredoc, and heredoc bodies are stripped *before*
+  the cap applies — so the fixture never exceeded it and the test passed without exercising the fix
+  at all (the mutation came back NOT CAUGHT and was right to). It now pads with real shell code and
+  asserts up front that the match really does land past the cap. 4 assertions, mutation-tested 2/2.
+
 ## [0.5.2] — 2026-09-07
 
 ### Fixed
