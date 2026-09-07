@@ -36,6 +36,20 @@ grep -qF 'command -v waypoints.py' "$SKILL"; check $? "the CLI presence probe is
 grep -qi 'unrecognised-command\|unrecognized-command' "$SKILL"
 check $? "handles a waypoints too old to have resolve"
 
+# --- step 0: scan the transcript rather than resuming the session ---
+has "documents the transcript scanner"        'scripts/audit-scan.py'
+has "shows the exclude-the-live-session form" '--exclude'
+has "documents --quote for follow-ups"        '--quote'
+grep -qi 'step 0' "$SKILL";               check $? "the scan is positioned as step zero"
+grep -qi 'fresh' "$SKILL";                check $? "frames it as auditing from a FRESH session"
+grep -qi 'compaction' "$SKILL";            check $? "gives the after-compaction reason for an ordinary wrap"
+grep -qi 'cc-transcript' "$SKILL";         check $? "points at the distiller for the different question"
+# The most dangerous misreading: treating "the scan found the file" as "the record is fine".
+grep -qi 'not a substitute\|never whether the change is correct' "$SKILL"
+check $? "states the scan locates drift without judging it"
+grep -qi 'Steps 1.6 are still the looking\|still the looking' "$SKILL"
+check $? "keeps the surface checks mandatory after the scan"
+
 # --- the standing prune contract must survive this change ---
 has "still documents prune"        'waypoints.py prune'
 has "still documents the archive"  'waypoints.py archive list'

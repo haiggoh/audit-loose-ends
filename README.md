@@ -34,6 +34,48 @@ judges each milestone by hand, releasing with `triage <id> --clear` when the mil
 even though its target has not. A waypoint parked on a condition that was met is presented as
 nothing-to-do while being ready to start, which is worse than a stale done-flag.
 
+### The transcript scan (`scripts/audit-scan.py`)
+
+Step 0 of the procedure, and the reason a long session is affordable to audit at all.
+
+```sh
+scripts/audit-scan.py --last 1                        # the most recent session in this project
+scripts/audit-scan.py --exclude "$CURRENT" --last 3   # skip the live session
+scripts/audit-scan.py --all-projects --since 2026-09-01
+scripts/audit-scan.py --last 1 --quote 'waypoints.*done' --budget 3000
+```
+
+It streams the raw session JSONL from **outside** and prints a few KB: the durable records modified
+grouped by surface (memory / plans / waypoints / CLAUDE.md / settings / hooks / automation), the
+waypoints commands run, commits and pushes and tags and releases condensed to repo-plus-subject,
+automation that was actually *changed* rather than merely inspected, the task list's end state, and a
+**GAPS** section naming what it cannot know. Read-only, and it prints its own compression ratio so
+the saving is measured rather than claimed — about **600× on a 4.8 MB transcript**.
+
+**The problem it solves is cost.** The facts a reconciliation needs are a few hundred bytes; the
+context they normally arrive in is megabytes. Resuming a 300k-token session to tidy up has cost
+several dollars in one go — more than the work being reconciled. So audit a big session the way
+`resume-interrupted` recovers one: from a **fresh** session, reading a digest, with nothing of the old
+session in context.
+
+What makes it cheap is that Claude Code already records every file it modified as a tiny
+`file-history-delta`, so the authoritative answer costs one small record per file version — the
+Edit/Write arguments, which are the largest payloads in the file, are never read. And when the digest
+raises a question, `--quote` prints just the matching records with line addresses and a hard character
+budget, so a follow-up costs what that one thread costs. Paying per question is the economy; loading
+the session to answer one is what it avoids.
+
+It is worth running for an **ordinary same-session wrap** too, for a specific reason: after a
+compaction your own record of the early session is gone while the transcript's is not, and that early
+work is exactly what gets left stale. It locates drift; it never judges it — a changed memory file is
+not a correct one, and a commit is not a clean tree. The surface checks still apply.
+
+> Different from [`cc-transcript`](https://github.com/haiggoh/claude-code-transcript-distiller),
+> which compacts a transcript for **reading** — a faithful, line-addressable chronology, and the right
+> tool when you need the session's reasoning. On that same 4.8 MB transcript it produces a 352 KB
+> capsule (~88k tokens, still about a dollar to load). Preservation versus reconciliation: different
+> questions, different sizes.
+
 ### The secret sweep (`scripts/redact-secret.py`)
 
 "Nothing accidentally public" is the one step in the procedure that used to get answered with an
@@ -102,8 +144,10 @@ It's a plugin — disable or uninstall via `/plugin` if you don't want the remin
 ## Tests
 
 ```
-bash tests/test_nudge.sh
-bash tests/test_redact_secret.sh   # includes a mutation check: removing L1 must break the corpus
+bash    tests/test_nudge.sh
+bash    tests/test_skill.sh
+bash    tests/test_redact_secret.sh   # includes a mutation check: removing L1 must break the corpus
+python3 tests/test_audit_scan.py     # planted positives for every detector; mutation-tested 21/21
 ```
 
 ## License

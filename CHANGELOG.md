@@ -1,5 +1,64 @@
 # Changelog
 
+## [0.5.0] — 2026-09-07
+
+### Added
+- **`scripts/audit-scan.py` — reconcile a session by scanning its transcript instead of resuming
+  it.** The facts this pass needs are a few hundred bytes; the context they normally arrive in is
+  megabytes. Reloading a 300k-token session to tidy up has cost several dollars in one go, which is
+  more than the work being reconciled — so the audit now starts from a digest read from **outside**
+  the transcript, in a fresh cheap session, the way `resume-interrupted` recovers one.
+  - Emits, in a few KB: durable records modified **grouped by surface** (memory / plans / waypoints /
+    CLAUDE.md / settings / hooks / automation / scripts / skills), the waypoints commands run,
+    commits / pushes / tags / releases condensed to repo-plus-subject, automation that was actually
+    **changed** rather than merely inspected, the task list's end state, and a **GAPS** section
+    naming what it cannot determine.
+  - **What makes it cheap:** Claude Code already records every modified file as a tiny
+    `file-history-delta` carrying just a path, so the authoritative answer costs one small record
+    per file version and the Edit/Write arguments — the largest payloads in the file, and the reason
+    a naive scan would cost as much as the thing it replaces — are never read.
+  - **`--quote REGEX --budget N`** is the other half: matching records only, with line addresses and
+    a hard character cap. The digest is deliberately too terse to answer follow-ups, so without a
+    targeted way to go deeper the only option would be loading the session. Paying per question is
+    the economy.
+  - Reports its **own compression ratio**, so the saving is measured rather than asserted: ~600× on
+    a 4.8 MB transcript.
+  - Selection: `--last N`, `--session`, `--project`, `--all-projects`, `--since`, and `--exclude` for
+    skipping the live session, which has not finished and so cannot be reconciled yet. `--json` for
+    the unabridged facts, `--list` to see what would be scanned. Read-only in every mode, asserted
+    by a byte-comparison test.
+  - Quoted text is scrubbed through the plugin's **own** `redact-secret.py` rather than a
+    hand-rolled pattern, and a redactor that fails to load or errors is reported as UNAVAILABLE /
+    fails closed — never silently skipped.
+- **Step 0 in the skill, and it applies to an ordinary wrap too.** Not only the expensive case: after
+  a compaction your own record of the early session is gone while the transcript's is not, and that
+  early work is exactly what gets left stale. Recall is also lossy in the direction that matters — it
+  favours what was recent and interesting, while the audit needs what was *touched*. The rule: run it
+  unless the session is short enough to name every file you changed.
+- The skill and README state plainly what the scan does **not** do: it locates drift without judging
+  it. A changed memory file is not a correct one; a commit is not a clean tree. Steps 1–6 still do
+  the looking. The README also documents why this is not
+  [`cc-transcript`](https://github.com/haiggoh/claude-code-transcript-distiller) — measured, not
+  assumed: that distiller turns the same 4.8 MB transcript into a 352 KB capsule (~88k tokens), which
+  is the right artifact for reading a session and the wrong one for reconciling it.
+
+### Tests
+- `tests/test_audit_scan.py` — framework-free, no pytest. Every detector is tested against a
+  **planted positive** as well as its negative, because during development three detectors "passed"
+  by finding nothing: a heredoc-stripping fix silently removed the real `launchctl` calls along with
+  the false ones and the digest looked *cleaner* for it. A detector that cannot be shown to fire is
+  indistinguishable from a broken one.
+- Mutation-tested **21/21**. The sweep additionally exposed four tests that were asserting nothing:
+  a fixture that placed the planted string where an anchor rejected it anyway, a size check that
+  passed via a different cap, an assertion that compared a truncation against the very constant that
+  produced it, and a fixture helper that ran `json.dumps` over its own deliberately-malformed lines
+  and thereby made them valid. All four are fixed and now fail when the behaviour is removed.
+- Bugs the tests caught and now pin: `realParentDir` + `trackingPath` were joined into a doubled
+  path so no file matched its own tool call; macOS's `/tmp` → `/private/tmp` symlink made one file
+  appear as two; `Read` was counted as a file change; `redact-secret`'s `DEFAULT_PATTERN` is raw
+  **bytes** and passing it uncompiled made every quoted line come out `[REDACTION FAILED]` — safe,
+  silent and useless.
+
 ## [0.4.0] — 2026-09-07
 
 ### Added

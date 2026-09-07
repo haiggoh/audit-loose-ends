@@ -25,6 +25,62 @@ It is **NOT length-based**: a long but read-only/exploratory/record-free task ne
 (nothing can have gone stale); a short task that just closed a tracked to-do does. Tie-breaker:
 *"did this change persistent state or finish something a record calls open?"*
 
+## Step 0: scan the transcript instead of resuming the session
+
+Before anything else, establish **what the session actually changed** — from the transcript, not
+from recollection:
+
+```sh
+"$CLAUDE_PLUGIN_ROOT/scripts/audit-scan.py" --last 1              # the most recent session here
+"$CLAUDE_PLUGIN_ROOT/scripts/audit-scan.py" --exclude "$CUR" --last 3   # skip the live one
+"$CLAUDE_PLUGIN_ROOT/scripts/audit-scan.py" --all-projects --since 2026-09-01
+```
+
+It streams the raw JSONL from outside and prints a few KB: the durable records modified grouped by
+surface, the waypoints commands run, commits/pushes/tags/releases by repo and subject, automation
+that was actually *changed* as opposed to merely inspected, the task list's end state, and a GAPS
+section naming what it cannot know. Read-only, and it reports its own compression so the saving is
+measured rather than claimed (~600× on a 4.8 MB transcript).
+
+**Why this is step zero: it makes auditing a long session affordable.** The alternative is resuming
+it, and a 300k-token session costs several dollars to reload for a job whose output is a handful of
+edits — the reconciliation ends up costing more than the work it reconciles. So audit a big session
+the way `resume-interrupted` recovers one: from a **fresh** session, reading a digest. Nothing from
+the old session enters context except the digest.
+
+When the digest raises a question, do **not** reach for the whole transcript. Quote just the thread:
+
+```sh
+"$CLAUDE_PLUGIN_ROOT/scripts/audit-scan.py" --last 1 --quote 'waypoints.*done' --budget 3000
+```
+
+`--quote` prints matching records with line addresses and a hard character budget, so a follow-up
+costs what that one thread costs. Paying per-question is the whole economy of this approach; loading
+the session to answer one is what it exists to avoid. If you genuinely need the full chronology
+(reconstructing *reasoning*, not *changes*), that is what `cc-transcript` is for — a different tool
+for a different question, and a much larger artifact.
+
+### Yes, use it for an ordinary wrap too
+
+Not only for the expensive case. In a normal same-session wrap the scan is still worth running,
+because your recollection is the weakest part of the pass:
+
+- **After a compaction, your own record of the early session is gone** — the transcript's is not.
+  Anything you changed before the compaction is exactly what you will fail to reconcile, and it is
+  precisely what the scan still sees.
+- Recall is lossy in the specific direction that matters: it favours what you did *recently* and
+  what you found *interesting*, while the audit needs what you *touched*. A file edited once, early,
+  in passing, is both the easiest to forget and the most likely to be left stale.
+- It is cheap enough that the threshold should be low — a fraction of a second, a few KB.
+
+So the honest rule is: run it unless the session is short enough that you can name every file you
+changed. Treat a disagreement between the digest and your memory as the digest being right about
+*what happened* and you being right about *what it meant*.
+
+**Do not treat it as a substitute for the surface checks below.** It says a memory file changed,
+never whether the change is correct or whether an index entry is missing; it reports a commit, never
+whether the tree is clean now. It tells you where to look. Steps 1–6 are still the looking.
+
 ## The procedure
 
 Scan each surface and fix drift before closing:
