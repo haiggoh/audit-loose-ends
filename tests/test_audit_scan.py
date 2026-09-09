@@ -87,6 +87,23 @@ def cmds(records, cat):
     return [A.condense(cat, c) for c in scan_records(records).cmds.get(cat, [])]
 
 
+def render(records):
+    """The rendered DIGEST for a set of records, not the Scan object.
+
+    Some findings exist only in the report layer (which section a path lands in, what GAPS says),
+    so asserting on Scan fields alone would let a detector fire while the reader never sees it.
+    Goes through the CLI, like the end-to-end tests."""
+    with tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False) as fh:
+        for r in records:
+            fh.write((r if isinstance(r, str) else json.dumps(r)) + "\n")
+        path = fh.name
+    try:
+        return subprocess.run([sys.executable, SCRIPT, path], capture_output=True, text=True,
+                              timeout=60).stdout
+    finally:
+        os.unlink(path)
+
+
 # --------------------------------------------------------------------------- path reconstruction
 
 print("== file-history path reconstruction ==")
@@ -503,6 +520,69 @@ with tempfile.TemporaryDirectory() as td:
     r = subprocess.run([sys.executable, SCRIPT, "--project", "no-such-project-xyz"],
                        capture_output=True, text=True, timeout=60)
     check(r.returncode == 1, "an empty selection exits non-zero rather than pretending success")
+
+# ------------------------------------------------- shell-written durable records (the 09-08 miss)
+
+print("== shell-written durable records: the scan's own blind spot ==")
+# MEASURED 2026-09-08: a session modified three memory files and the digest reported ONE. The two
+# it missed were written by a heredoc and by `sed -i` — neither produces a file-history delta nor a
+# Write/Edit record. An auto-mode session is instructed to prefer exactly those, so the sessions
+# most likely to be audited this way were the ones it was blindest on.
+MEM = "/Users/bra0002h/.claude/projects/-Users-bra0002h/memory"
+SHELL_WRITE_POSITIVES = [
+    (f"cat >> {MEM}/a-fact.md <<'EOF'\nbody\nEOF",        f"{MEM}/a-fact.md",  "heredoc append"),
+    (f"cat > {MEM}/b-fact.md <<'EOF'\nbody\nEOF",         f"{MEM}/b-fact.md",  "heredoc create"),
+    (f"sed -i '' 's/x/y/' {MEM}/MEMORY.md",                f"{MEM}/MEMORY.md",  "sed -i in place"),
+    (f"echo hi | tee -a {MEM}/c-fact.md",                  f"{MEM}/c-fact.md",  "tee -a"),
+    (f"cp /tmp/draft.md {MEM}/d-fact.md",                  f"{MEM}/d-fact.md",  "cp onto a record"),
+    ("printf x > ~/.claude/settings.json",     "/Users/bra0002h/.claude/settings.json", "settings"),
+]
+for cmd, want, label in SHELL_WRITE_POSITIVES:
+    got = scan_records([rec_bash(cmd)]).shell_writes
+    check(any(os.path.normpath(want) == k for k in got),
+          f"shell-write fires: {label}", f"cmd={cmd[:40]!r} got={list(got)}")
+
+print("== shell-write negatives: noise must NOT be reported as a durable change ==")
+SHELL_WRITE_NEGATIVES = [
+    ("echo x > /tmp/scratch.txt",                    "a temp file is not a durable record"),
+    ("ls -l > /dev/null 2>&1",                       "/dev/null and 2>&1 are not paths"),
+    ("python3 script.py 2>&1 | tail -5",             "a stderr dup is not a redirect target"),
+    (f"cat {MEM}/a-fact.md",                         "READING a record is not writing it"),
+    (f"grep -c foo {MEM}/MEMORY.md",                 "grepping a record is not writing it"),
+    ("git commit -m 'update MEMORY.md and memory/x.md'",
+     "a path inside a COMMIT MESSAGE is not a write"),
+]
+for cmd, label in SHELL_WRITE_NEGATIVES:
+    got = scan_records([rec_bash(cmd)]).shell_writes
+    check(not got, f"shell-write quiet: {label}", f"cmd={cmd[:46]!r} got={list(got)}")
+
+# The stronger evidence must WIN: a file with a real delta record must not also be listed as a
+# lower-confidence shell write, or one change reads as two.
+_out = render([rec_bash(f"cat >> {MEM}/both.md <<'EOF'\nx\nEOF"),
+               rec_delta(MEM, "both.md")])
+check(_out.count(f"{MEM}/both.md") == 1,
+      "a file with a delta record is not double-reported as a shell write")
+
+# GAPS must name the SPECIFIC uncertainty. The old line fired unconditionally and was printed on
+# the very session that had three shell-written memory files, telling the reader nothing.
+_g = render([rec_bash(f"cat >> {MEM}/e-fact.md <<'EOF'\nx\nEOF")])
+check("were really MODIFIED" in _g, "GAPS names the shell-written paths it actually saw")
+_g2 = render([rec_bash("git status --porcelain")])
+check("shell redirect with no tool record" in _g2,
+      "GAPS keeps the generic line when no shell write was seen")
+
+# A relative path must resolve against the cwd IN EFFECT, not the session's most common one.
+# Found by dogfooding: the digest named cost-tracker/scripts/audit-scan.py, a file in neither
+# repo, because the session's dominant cwd was the other project. Inventing a path is worse than
+# omitting one — it sends the reader to audit something that does not exist.
+_r1 = dict(rec_bash("sed -i '' s/a/b/ scripts/audit-scan.py"))
+_r1["cwd"] = "/Users/bra0002h/ClaudeWorkspace/audit-loose-ends"
+_r2, _r3 = dict(rec_bash("echo 1")), dict(rec_bash("echo 2"))
+_r2["cwd"] = _r3["cwd"] = "/Users/bra0002h/ClaudeWorkspace/cost-tracker"   # the DOMINANT cwd
+_got = list(scan_records([_r2, _r1, _r3]).shell_writes)
+check(_got == ["/Users/bra0002h/ClaudeWorkspace/audit-loose-ends/scripts/audit-scan.py"],
+      "a relative path resolves against the cwd in effect, not the dominant one",
+      f"got={_got}")
 
 print()
 if _fail:

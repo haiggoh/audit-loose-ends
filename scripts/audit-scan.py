@@ -81,6 +81,32 @@ SURFACES = [
 # sections the audit is meant to trust become the noisiest ones in the digest.
 _CMDPOS = r"(?:^|\n|&&|\|\||;|\||\(|`|\$\()\s*(?:sudo\s+)?(?:[\w./~-]*/)?"
 
+
+# --- writes performed by the SHELL rather than by a writing tool --------------------------------
+# A file changed by `cat > f`, a heredoc, `sed -i`, `tee` or `>>` produces NO file-history-delta and
+# NO Write/Edit record, so it was invisible to this scan. MEASURED 2026-09-08: a session that
+# modified three memory files reported one — and the two it missed were the heredoc and the sed.
+#
+# That is the reverse of this tool's whole premise. The scan is documented as being right about what
+# happened while recollection is lossy; here recollection was right and the digest was wrong. Worse,
+# an auto-mode session is INSTRUCTED to prefer sed/heredoc over the Edit tool, so the sessions most
+# likely to be audited this way are exactly the ones it is blindest on.
+#
+# Kept as a SEPARATE, LOWER-CONFIDENCE group rather than merged into the main list: a path appearing
+# in a command string is weaker evidence than a delta record (the command may have failed, been a
+# dry run, or named the path only to read it), and silently mixing the two would trade a false
+# negative for a false positive in the one section the audit acts on.
+_SHELL_WRITE_RES = (
+    # `> path`, `>> path` — but NOT `2>&1`, `>&2`, or a process substitution
+    re.compile(r"(?<![0-9&])>>?\s*(?![&(])([\w./~$-]+)"),
+    # heredoc into a file: `cat > path <<EOF` is caught above; `tee path` is its own form
+    re.compile(_CMDPOS + r"tee\s+(?:-a\s+)?([\w./~$-]+)"),
+    # in-place editors: sed -i, perl -i, and gnu variants
+    re.compile(_CMDPOS + r"(?:sed|perl)\s+(?:-\S+\s+)*-i(?:\s+''|\s+\S*)?\s+(?:-\S+\s+)*(?:'[^']*'|\"[^\"]*\"|\S+)\s+([\w./~$-]+)"),
+    # explicit moves/copies ONTO a durable path
+    re.compile(_CMDPOS + r"(?:mv|cp|install)\s+(?:-\S+\s+)*\S+\s+([\w./~$-]+)"),
+)
+
 CMD_PATTERNS = [
     ("waypoints",  re.compile(_CMDPOS + r"waypoints(?:\.py)?\s+(?!--help|-h\b)\S+")),
     ("git-commit", re.compile(_CMDPOS + r"git\s[^\n|;&]*\bcommit\b")),
@@ -468,12 +494,18 @@ class Scan:
         self.odd_records = 0      # parsed, but not a usable object
         self.session_ids = set()
         self.cwds = collections.Counter()
+        self.cur_cwd = None                      # cwd of the record currently being fed
         self.branches = collections.Counter()
         self.versions = set()
         self.first_ts = None
         self.last_ts = None
         self.turns = collections.Counter()
         self.files = collections.Counter()       # abs path -> version count
+        # Paths that only a SHELL command names as a write target. Lower confidence than
+        # self.files by construction — see _SHELL_WRITE_RES. Kept separate so the two are
+        # never conflated in the report.
+        self.shell_writes = collections.Counter()   # abs path -> times named
+        self.saw_shell_write_cmd = False            # did any write-shaped shell command appear?
         self.tools = collections.Counter()
         self.cmds = collections.defaultdict(list)   # category -> [command]
         self.readonly_git = 0
@@ -503,6 +535,13 @@ class Scan:
                 self.session_ids.add(d[key])
         if d.get("cwd"):
             self.cwds[d["cwd"]] += 1
+            # The cwd IN EFFECT for the records that follow. A session that moves between repos
+            # has several, and resolving a relative path against the most COMMON one invents a
+            # path that never existed: dogfooding this scanner reported
+            # cost-tracker/scripts/audit-scan.py, a file in neither repo, because the dominant
+            # cwd was the other project. A wrong path is worse than no path — it sends the reader
+            # to audit a file that does not exist.
+            self.cur_cwd = d["cwd"]
         if d.get("gitBranch"):
             self.branches[d["gitBranch"]] += 1
         if d.get("version"):
@@ -589,6 +628,7 @@ class Scan:
             self.readonly_git += 1
             return
         probe = shell_only(cmd)
+        self._mine_shell_writes(probe, cmd)
         subj = _subject_of(cmd)
         subj_tail = SUBJ_MARK + " ".join(subj.split())[:200] if subj else ""
         if AUTOMATION_READONLY.search(probe):
@@ -610,6 +650,42 @@ class Scan:
                 # The subject tail goes LAST: condense() cuts the value at the marker, so anything
                 # appended after it is invisible -- which is where the match window was going.
                 self.cmds[cat].append(code + subj_tail)
+
+    def _mine_shell_writes(self, probe, raw):
+        """Pull write TARGETS out of a shell command and keep the ones on a durable surface.
+
+        Runs on the prose-masked `probe`, not the raw command, so a path quoted inside a commit
+        message or a heredoc BODY is not mistaken for a write target — that is the same masking the
+        category patterns rely on, and without it a commit message naming a memory file would
+        register as an edit to it.
+
+        Filtered to durable surfaces on purpose: `> /tmp/x` and `> /dev/null` are the overwhelming
+        majority of redirects in any session and none of them are records worth auditing."""
+        for rx in _SHELL_WRITE_RES:
+            for m in rx.finditer(probe):
+                tgt = m.group(1)
+                if not tgt or tgt.startswith("$") or tgt in ("/dev/null", "/dev/stderr"):
+                    continue
+                self.saw_shell_write_cmd = True
+                # a bare relative path cannot be resolved without knowing the cwd at that moment;
+                # anchor it on the session's dominant cwd, same rule the delta handler uses.
+                if not os.path.isabs(tgt) and not tgt.startswith("~"):
+                    base = self.cur_cwd or (self.cwds.most_common(1)[0][0] if self.cwds else None)
+                    if not base:
+                        continue
+                    tgt = os.path.join(base, tgt)
+                tgt = canon(os.path.expanduser(tgt))
+                surface = classify(tgt)
+                # The `docs` surface is `*.md`/`*.txt`/`*.rst`, which a scratch file in /tmp
+                # satisfies — and `> /tmp/x.txt` is one of the commonest lines in any session.
+                # A delta record for such a file is still worth reporting (something really
+                # changed), but a merely-NAMED temp path is noise, and noise in this section
+                # trades the false negative this fix exists for against a false positive.
+                if surface == "other":
+                    continue
+                if tgt.startswith(("/private/tmp/", "/private/var/", "/tmp/", "/var/")):
+                    continue
+                self.shell_writes[tgt] += 1
 
     def run(self):
         with open(self.path, "r", encoding="utf-8", errors="replace") as fh:
@@ -715,6 +791,16 @@ def report(scans, args):
                           "(read, or written via a shell redirect)",
                      mentioned_only)
 
+        # Durable records the SHELL wrote. Anything already carrying a delta or a writing-tool
+        # record is dropped: it is confirmed by stronger evidence and repeating it here would
+        # imply the weaker finding is a separate change.
+        shell_only_writes = sorted(sp for sp in s.shell_writes
+                                   if sp not in touched and sp not in s.files)
+        if shell_only_writes:
+            _section(out, "DURABLE RECORDS WRITTEN BY A SHELL COMMAND "
+                          "(lower confidence — a named path is weaker evidence than a delta)",
+                     [f"{sp}   [{classify(sp)}]" for sp in shell_only_writes])
+
         for cat in ("waypoints", "git-commit", "git-push", "git-tag", "release",
                     "plugin", "automation", "destructive"):
             if s.cmds.get(cat):
@@ -767,7 +853,19 @@ def report(scans, args):
         out.append("  · whether a repo is currently clean (run `git status` yourself; a commit")
         out.append("    here is not evidence of a clean tree afterwards)")
         out.append("  · whether a memory/plan edit is CORRECT, only that it happened")
-        out.append("  · anything from a file written by a shell redirect with no tool record")
+        # This line used to fire unconditionally and say only that shell-written files are
+        # invisible. It was printed on the very session that HAD three shell-written memory
+        # files, so the reader learned nothing about their own scan. GAPS is the mechanism that
+        # names what the tool cannot know, so it must report the SPECIFIC uncertainty it saw.
+        if shell_only_writes:
+            out.append(f"  · whether the {len(shell_only_writes)} shell-written path(s) above were "
+                       "really MODIFIED — the")
+            out.append("    command names them, but no delta record confirms the write landed")
+        elif s.saw_shell_write_cmd:
+            out.append("  · write-shaped shell commands ran, but named no path on a durable "
+                       "surface")
+        else:
+            out.append("  · anything from a file written by a shell redirect with no tool record")
         out.append("  · the session's reasoning or intent — use --quote, or cc-transcript, for that")
         if _RED is None:
             out.append("  · ⚠️  redaction was UNAVAILABLE, so quoted text above is unfiltered")

@@ -1,5 +1,55 @@
 # Changelog
 
+## [0.5.6] — 2026-09-10
+
+### Fixed — the scanner was blind to records written by the shell
+
+MEASURED 2026-09-08: `audit-scan.py --last 1` reported **1** memory file modified for a session that
+modified **3**. The two it missed were written by a heredoc and by `sed -i`; the one it caught used
+the Write tool. Neither shell form produces a `file-history-delta` or a `Write`/`Edit` record, so
+they were invisible — and a short `DURABLE RECORDS` list reads as *"nothing changed"* when it
+actually means *"nothing changed through a tool I parse"*.
+
+That inverts this tool's whole premise. The scan is documented as being right about what happened
+while recollection is lossy; here recollection was right and the digest was wrong. It also bites
+hardest exactly where it is used most: an auto-mode session is *instructed* to prefer `sed`/heredoc
+over the Edit tool, so the sessions most likely to be audited this way were the ones it was
+blindest on.
+
+- Write targets are now mined from Bash command strings — `>`/`>>`, heredoc redirects, `tee`,
+  `sed -i`/`perl -i`, and `mv`/`cp`/`install` onto a path — and reported under
+  **`DURABLE RECORDS WRITTEN BY A SHELL COMMAND`**, a deliberately SEPARATE lower-confidence
+  section. A path in a command is weaker evidence than a delta record (the command may have failed
+  or been a dry run), so merging the two would trade this false negative for a false positive in
+  the one section the audit acts on. A file with a real delta record is never double-reported.
+- Mined from the prose-MASKED command, so a path quoted inside a commit message is not counted as
+  a write, and filtered to durable surfaces — with temp dirs excluded, because `> /tmp/x.txt`
+  matches the `docs` glob (`*.txt`) and is the commonest redirect in any session.
+
+### Fixed — GAPS printed a generic disclaimer instead of naming what it saw
+
+Second defect from the same run: GAPS printed *"anything from a file written by a shell redirect"*
+**unconditionally**, including on the very session that had three such files. GAPS is the mechanism
+that names what the tool cannot know, so it now reports the specific uncertainty — how many
+shell-written paths were found and that no delta confirms the write landed — and keeps the generic
+line only when no write-shaped command appeared at all.
+
+### Fixed — a relative path resolved against the wrong cwd, inventing a path
+
+Found by DOGFOODING the fix on the session that wrote it: the digest named
+`cost-tracker/scripts/audit-scan.py`, a file in neither repo, because relative paths were resolved
+against the session's *most common* cwd rather than the one in effect at that record. A session that
+moves between repos gets a path that never existed — worse than no path, since it sends the reader
+to audit a file that is not there. Now tracked per record.
+
+Tests: 15 new checks (6 planted positives, 6 noise negatives, plus double-reporting, both GAPS
+branches, and the cwd case) in the repo's framework-free style, mutation-tested **5/5** — removing
+the miner, dropping the redirect pattern, merging the two confidence levels, reverting GAPS to the
+unconditional line, and restoring the dominant-cwd resolution are each caught. The skill now
+documents both sections, how to read them differently, and the residual blind spot: a path named
+only *inside* a heredoc body is still undetected, so `ls -lt` over the records dir remains the
+cross-check.
+
 ## [0.5.5] — 2026-09-07
 
 ### Fixed

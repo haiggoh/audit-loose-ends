@@ -39,7 +39,22 @@ from recollection:
 It streams the raw JSONL from outside and prints a few KB: the durable records modified grouped by
 surface, the waypoints commands run, commits/pushes/tags/releases by repo and subject, automation
 that was actually *changed* as opposed to merely inspected, the task list's end state, and a GAPS
-section naming what it cannot know. Read-only, and it reports its own compression so the saving is
+section naming what it cannot know.
+
+**Two sections, two confidence levels — read them differently.** `DURABLE RECORDS MODIFIED` is backed
+by a change record. `DURABLE RECORDS WRITTEN BY A SHELL COMMAND` is inferred from a path appearing in
+a `>`/heredoc/`sed -i`/`tee` command, which is weaker: the command may have failed, been a dry run, or
+named the path only in passing. Confirm those before acting on them. They are reported because the
+alternative was worse — before 0.5.6 they were reported **not at all**, so a session that edited three
+memory files through heredocs showed one, and a short list read as *"nothing changed"* when it meant
+*"nothing changed through a tool I parse"*. That inverts the tool's premise, and it bites hardest in
+auto-mode sessions, which are instructed to prefer `sed`/heredoc over the Edit tool.
+
+**The residual blind spot, worth knowing because it is invisible.** A path that appears only *inside*
+a heredoc body — `cat > /tmp/patch.py <<'PY'` where the Python then rewrites a memory file — is still
+undetected, because no shell redirect names it. So `ls -lt` over the records dir, bounded by the
+printed session span, remains the cross-check for a session that scripted its edits. One command, and
+it is what caught the original under-report. Read-only, and it reports its own compression so the saving is
 measured rather than claimed (~600× on a 4.8 MB transcript).
 
 **Why this is step zero: it makes auditing a long session affordable.** The alternative is resuming
