@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.5.7] — 2026-09-18
+
+### Added — skill observations as a reconciliation surface
+
+- The audit procedure now scans `~/.claude/projects/<project>/skill-observations/` for stale OPEN
+  entries: action them, or mark them ACTIONED/DECLINED with a date, and archive anything past 90
+  days. An observation log is exactly the surface this plugin exists to reconcile — entries
+  accumulate as OPEN because nothing ever revisits them. Treated as a SOFT dependency like the
+  waypoints store: absent directory means skip the step silently.
+- The step is documented as reviewing *proposals*, not authoritative state, so promoting one into
+  a durable rule stays approval-gated rather than something the audit does on its own.
+
+### Internal
+
+- `tests/test_version_consistency.sh` asserts the manifest and the CHANGELOG's newest released
+  heading agree, and that the heading has at least one bullet — a bump with no entry of its own
+  was the specific way this drifted before.
+
 ## [0.5.6] — 2026-09-10
 
 ### Fixed — the scanner was blind to records written by the shell

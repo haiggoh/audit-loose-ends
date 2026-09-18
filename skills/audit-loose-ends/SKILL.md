@@ -108,7 +108,12 @@ Scan each surface and fix drift before closing:
    still list things that are done?
 3. **Reminders / crons / scheduled tasks**: still needed, or fired-and-forgotten?
 4. **Task list** (the session task tracker): anything stuck pending/in-progress that's actually done?
-5. **The waypoints store** (`~/.claude/waypoints.json`, if the `waypoints` plugin is present): mark
+5. **Skill observations** (`~/.claude/projects/<project>/skill-observations/`, if a task-observer
+   skill is writing there): review OPEN entries in `log.md` — action them (create a skill, update a
+   plugin, record in memory) or mark them ACTIONED/DECLINED with the date. Archive entries older than
+   90 days. These are PROPOSALS, never authoritative state: promoting one into a durable rule is
+   approval-gated, so an entry you cannot action is closed or left open honestly, not silently kept.
+6. **The waypoints store** (`~/.claude/waypoints.json`, if the `waypoints` plugin is present): mark
    finished items done (`waypoints.py done <id>`); **add genuinely-open follow-ups** you'd not want to
    lose as new waypoints (`waypoints.py add "…" [--surface-on YYYY-MM-DD]`). Then **release whatever
    is no longer waiting**, and finally **prune** — both below.
@@ -167,7 +172,7 @@ Scan each surface and fix drift before closing:
 
    **SOFT DEPENDENCY — probe, never assume.** This skill must work unchanged on a machine that
    does not have waypoints, so do not run any `waypoints.py` command until you have confirmed it
-   is there. One check, and no output means not installed → skip step 5 entirely and say nothing
+   is there. One check, and no output means not installed → skip step 6 (the waypoints step) entirely and say nothing
    about it:
 
    ```sh
