@@ -31,7 +31,7 @@ Before anything else, establish **what the session actually changed** — from t
 from recollection:
 
 ```sh
-"$CLAUDE_PLUGIN_ROOT/scripts/audit-scan.py" --last 1              # the most recent session here
+"$CLAUDE_PLUGIN_ROOT/scripts/audit-scan.py"                        # THIS session (self-identifying)
 "$CLAUDE_PLUGIN_ROOT/scripts/audit-scan.py" --exclude "$CUR" --last 3   # skip the live one
 "$CLAUDE_PLUGIN_ROOT/scripts/audit-scan.py" --all-projects --since 2026-09-01
 ```
@@ -66,7 +66,7 @@ the old session enters context except the digest.
 When the digest raises a question, do **not** reach for the whole transcript. Quote just the thread:
 
 ```sh
-"$CLAUDE_PLUGIN_ROOT/scripts/audit-scan.py" --last 1 --quote 'waypoints.*done' --budget 3000
+"$CLAUDE_PLUGIN_ROOT/scripts/audit-scan.py" --quote 'waypoints.*done' --budget 3000
 ```
 
 `--quote` prints matching records with line addresses and a hard character budget, so a follow-up

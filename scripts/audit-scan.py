@@ -447,9 +447,44 @@ def project_slug(path):
     return path.replace("/", "-")
 
 
+def current_session_transcript():
+    """Return this session's own transcript path, or None.
+
+    Claude Code exports CLAUDE_CODE_SESSION_ID into the Bash tool environment, and the
+    transcript is always <that id>.jsonl somewhere under ~/.claude/projects. That is an
+    IDENTITY, so it beats both heuristics this script used to rely on:
+
+      * the project dir was derived from os.getcwd(), but a transcript lives under the
+        directory the session was LAUNCHED in, and cwd drifts during a session;
+      * candidates were then ordered by file MTIME, so a ten-second nested `claude -p`
+        probe outranked a thousand-record real session.
+
+    Measured 2026-09-20: those two together made `--last 1` scan an unrelated 42-record
+    child transcript and report "changed no tracked file" for a session that had just cut
+    three releases. A wrong-subject clean bill is worse than no check, so prefer identity
+    and keep the heuristic only as a fallback.
+    """
+    sid = os.environ.get("CLAUDE_CODE_SESSION_ID", "").strip()
+    if not sid:
+        return None
+    for root in glob.glob(os.path.join(PROJECTS_DIR, "*")):
+        cand = os.path.join(root, f"{sid}.jsonl")
+        if os.path.isfile(cand):
+            return cand
+    return None
+
+
 def find_transcripts(args):
     if args.file:
         return [os.path.abspath(f) for f in args.file]
+    # With no explicit target, audit THIS session rather than guessing from cwd+mtime.
+    # Any of --session/--project/--all-projects/--since means the user named a target, and
+    # --last N>1 asks for a range, so self-identification would be wrong in all of those.
+    if (not args.session and not args.project and not args.all_projects
+            and not args.since and not args.exclude and args.last == 1):
+        own = current_session_transcript()
+        if own:
+            return [own]
     roots = []
     if args.all_projects:
         roots = sorted(glob.glob(os.path.join(PROJECTS_DIR, "*")))
@@ -759,6 +794,17 @@ def report(scans, args):
             out.append(f"  cc version  {', '.join(sorted(s.versions))}")
         if s.subagents:
             out.append(f"  subagents   {s.subagents} sidechain record(s)")
+
+        # WRONG-SUBJECT GUARD. Selection can still be a heuristic (no CLAUDE_CODE_SESSION_ID,
+        # or the user named a --project/--last range), and the failure mode that matters is
+        # SILENT: a scan of someone else's transcript reports "changed no tracked file" and
+        # reads as a clean wrap. If we know our own id and it is absent from this transcript,
+        # say so where the verdict is read rather than leaving it to be inferred from the span.
+        own_sid = os.environ.get("CLAUDE_CODE_SESSION_ID", "").strip()
+        if own_sid and s.session_ids and own_sid not in s.session_ids:
+            out.append(f"  ⚠️  NOT THIS SESSION — current is {own_sid[:8]}; findings below "
+                       f"describe a DIFFERENT session. Pass an explicit path, or drop "
+                       f"--project/--last, to audit your own.")
 
         # --- durable records, grouped by surface: this is the section the audit acts on ---
         touched = {p: n for p, n in s.files.items() if n > 0}

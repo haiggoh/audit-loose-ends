@@ -584,6 +584,86 @@ check(_got == ["/Users/bra0002h/ClaudeWorkspace/audit-loose-ends/scripts/audit-s
       "a relative path resolves against the cwd in effect, not the dominant one",
       f"got={_got}")
 
+# --- SELF-IDENTIFICATION: the default must audit THIS session, not the newest file ------
+# Both halves of the old selection were wrong for an agent session: the project dir came from
+# os.getcwd() (a transcript lives under the LAUNCH dir, and cwd drifts), and candidates were
+# then ranked by MTIME. Measured 2026-09-20: `--last 1` picked a 42-record nested `claude -p`
+# probe over the live 1000-record session and reported "changed no tracked file" — a clean bill
+# for the wrong subject, which reads exactly like a tidy wrap.
+#
+# The fixture deliberately gives the WRONG transcript the NEWER mtime. A fixture where the
+# right answer is also the newest would pass against the broken code and prove nothing.
+_sess_tmp = tempfile.mkdtemp()
+_own_id, _other_id = "aaaaaaaa-1111-2222-3333-444444444444", "bbbbbbbb-5555-6666-7777-888888888888"
+_proj_a = os.path.join(_sess_tmp, "-Users-someone")                      # launch dir
+_proj_b = os.path.join(_sess_tmp, "-Users-someone-ClaudeWorkspace-repo")  # drifted cwd
+os.makedirs(_proj_a); os.makedirs(_proj_b)
+_own = os.path.join(_proj_a, f"{_own_id}.jsonl")
+_other = os.path.join(_proj_b, f"{_other_id}.jsonl")
+with open(_own, "w") as fh:
+    fh.write(json.dumps({"sessionId": _own_id, "type": "user",
+                         "message": {"role": "user", "content": "real work"}}) + "\n")
+with open(_other, "w") as fh:
+    fh.write(json.dumps({"sessionId": _other_id, "type": "user",
+                         "message": {"role": "user", "content": "probe"}}) + "\n")
+os.utime(_own, (1_600_000_000, 1_600_000_000))     # OLDER
+os.utime(_other, (1_700_000_000, 1_700_000_000))   # NEWER -> wins on mtime
+
+_saved_projects, _saved_env = A.PROJECTS_DIR, os.environ.get("CLAUDE_CODE_SESSION_ID")
+try:
+    A.PROJECTS_DIR = _sess_tmp
+    os.environ["CLAUDE_CODE_SESSION_ID"] = _own_id
+
+    check(A.current_session_transcript() == _own,
+          "the session's own transcript is found by id across project dirs")
+
+    class _Args:
+        file = None; project = None; all_projects = False; session = None
+        last = 1; since = None; exclude = []
+    check(A.find_transcripts(_Args()) == [_own],
+          "the DEFAULT selection is this session, not the newer unrelated transcript")
+
+    # An explicitly named target must still win over self-identification. --session filters the
+    # candidate list, which is built from the cwd-derived project dir, so point --project at the
+    # sandbox root to make both transcripts candidates.
+    _a2 = _Args(); _a2.session = _other_id; _a2.all_projects = True
+    check(A.find_transcripts(_a2) == [_other],
+          "--session still selects the named session, overriding self-identification")
+    _a3 = _Args(); _a3.last = 2; _a3.all_projects = True
+    check(sorted(A.find_transcripts(_a3)) == sorted([_own, _other]),
+          "--last 2 still returns a range instead of self-identifying")
+
+    # Without the env var it must fall back to the old behaviour rather than failing.
+    del os.environ["CLAUDE_CODE_SESSION_ID"]
+    check(A.current_session_transcript() is None,
+          "no session id in the environment yields no self-identification")
+
+    # The wrong-subject warning must FIRE on a foreign transcript and stay SILENT on our own.
+    # Through the CLI, because the warning only exists in the report layer — asserting on Scan
+    # fields would let it "work" while the reader never sees it.
+    def _digest(path, sid):
+        env = dict(os.environ, CLAUDE_CODE_SESSION_ID=sid)
+        return subprocess.run([sys.executable, SCRIPT, path], capture_output=True,
+                              text=True, timeout=60, env=env).stdout
+
+    _warn = "NOT THIS SESSION"
+    check(_warn in _digest(_other, _own_id),
+          "a foreign transcript is flagged NOT THIS SESSION")
+    check(_warn not in _digest(_own, _own_id),
+          "our own transcript is not flagged")
+    # And the flag must not appear when we cannot know our own identity.
+    _no_env = dict(os.environ); _no_env.pop("CLAUDE_CODE_SESSION_ID", None)
+    check(_warn not in subprocess.run([sys.executable, SCRIPT, _other], capture_output=True,
+                                      text=True, timeout=60, env=_no_env).stdout,
+          "no warning is invented when the environment has no session id")
+finally:
+    A.PROJECTS_DIR = _saved_projects
+    if _saved_env is None:
+        os.environ.pop("CLAUDE_CODE_SESSION_ID", None)
+    else:
+        os.environ["CLAUDE_CODE_SESSION_ID"] = _saved_env
+    import shutil; shutil.rmtree(_sess_tmp, ignore_errors=True)
+
 print()
 if _fail:
     print(f"FAILURES: {_fail}")

@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.6.0] — 2026-09-20
+
+### Fixed — the scan audited the wrong session, and said nothing about it
+
+`audit-scan.py` selected its target with two heuristics that are both wrong for an agent session:
+
+- the project directory came from `os.getcwd()`, but a transcript lives under the directory the session was **launched** in — and cwd drifts as a session moves between repos;
+- candidates were then ordered by **file mtime**, so a ten-second nested `claude -p` probe outranked a thousand-record real session.
+
+Measured: `--last 1` selected a 42-record child transcript over the live 1216-record session, reported "changed no tracked file", and would have certified a clean wrap for a session that had just cut three releases. **A clean bill for the wrong subject is worse than no check** — it is indistinguishable from a tidy wrap.
+
+- **The default now identifies this session from `CLAUDE_CODE_SESSION_ID`**, which Claude Code exports into the Bash tool environment, and looks for `<id>.jsonl` across every project dir. That is an identity, not a guess. Self-identification applies only when no target was named: `--file`, `--session`, `--project`, `--all-projects`, `--since`, `--exclude`, and `--last N>1` all behave exactly as before, and the old cwd+mtime path remains the fallback when the variable is absent.
+- **Added a wrong-subject warning.** When our own session id is known and is *absent* from the transcript being reported, the digest header says `⚠️ NOT THIS SESSION` with the current id. Selection can still be heuristic, so the remaining risk is made loud instead of silent. Nothing is invented when the id is unknown.
+
+### Changed
+
+- The nudge, `SKILL.md` and `README.md` now teach the bare invocation. They previously taught `--last 1`, which from this version onward *opts out* of self-identification and back into mtime ordering.
+
+### Testing
+
+- 10 new assertions in `tests/test_audit_scan.py`. The fixture deliberately gives the **wrong** transcript the **newer** mtime and puts the right one in a different project dir — a fixture where the correct answer is also the newest would pass against the broken code and prove nothing. Covers id lookup across dirs, the default, each override, the no-env fallback, and the warning firing *and* staying silent.
+- Inserted **before** the summary: this suite ends in `SystemExit`, so appended cases would never run while the total still printed `ALL PASS`.
+- Mutation-tested, both caught: removing self-identification fails an assertion; removing the warning fails an assertion. `scripts/audit-scan.py` restored to its exact pre-mutation shasum.
+
 ## [0.5.7] — 2026-09-18
 
 ### Added — skill observations as a reconciliation surface

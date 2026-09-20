@@ -48,9 +48,17 @@ case "$CTX" in *compaction*) check 0 "gives the after-compaction reason it appli
 # into "the memory is fine", which is the one misreading that would make the pass worse than none.
 case "$CTX" in *"WHERE to look"*) check 0 "says the scan locates drift but does not judge it";; *) check 1 "says the scan locates drift but does not judge it";; esac
 # There are now TWO scripts referenced, so the resolved-path check must cover both.
-SCAN2="$(printf '%s' "$CTX" | sed -n 's|.*`\(/[^`]*audit-scan.py\) --last 1.*|\1|p')"
+# The invocation is now bare — `--last 1` was REMOVED from the advice (it opts out of
+# self-identification), so the path must be matched on the backtick boundary alone.
+SCAN2="$(printf '%s' "$CTX" | sed -n 's|.*`\(/[^`]*audit-scan.py\)`.*|\1|p')"
 [ -n "$SCAN2" ] && [ -f "$SCAN2" ]
 check $? "the scanner pointer names an existing audit-scan.py ($SCAN2)"
+
+# The default self-identifies from CLAUDE_CODE_SESSION_ID as of 0.6.0, so the advice must
+# actively steer AWAY from --last 1, which reverts to mtime ordering and can pick a different
+# session. Asserting only that the path exists would let the stale invocation come back.
+case "$CTX" in *"CLAUDE_CODE_SESSION_ID"*) check 0 "names the env var the default relies on";; *) check 1 "names the env var the default relies on";; esac
+case "$CTX" in *"do NOT pass"*) check 0 "warns against --last 1 reverting to mtime picking";; *) check 1 "warns against --last 1 reverting to mtime picking";; esac
 
 case "$CTX" in *"NOT length-based"*) check 0 "states the non-length trigger";; *) check 1 "states the non-length trigger";; esac
 
