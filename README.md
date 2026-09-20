@@ -39,10 +39,10 @@ nothing-to-do while being ready to start, which is worse than a stale done-flag.
 Step 0 of the procedure, and the reason a long session is affordable to audit at all.
 
 ```sh
-scripts/audit-scan.py --last 1                        # the most recent session in this project
+scripts/audit-scan.py                                # THIS session, identified from CLAUDE_CODE_SESSION_ID
 scripts/audit-scan.py --exclude "$CURRENT" --last 3   # skip the live session
 scripts/audit-scan.py --all-projects --since 2026-09-01
-scripts/audit-scan.py --last 1 --quote 'waypoints.*done' --budget 3000
+scripts/audit-scan.py --quote 'waypoints.*done' --budget 3000
 ```
 
 It streams the raw session JSONL from **outside** and prints a few KB: the durable records modified
