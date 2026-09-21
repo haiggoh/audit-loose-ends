@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.6.1] — 2026-09-21
+
+### Fixed — waypoints 0.10.0 evidence gate compatibility
+
+The waypoints plugin 0.10.0 introduced an **evidence gate** requiring `--evidence` or `--no-evidence`
+when closing an item with `waypoints.py done <id>`. The audit procedure and nudge still taught the
+old bare `waypoints.py done <id>` syntax, which now fails with exit code 2.
+
+- Updated the SessionStart hook nudge (`hooks/nudge.sh`) to show the correct syntax:
+  `waypoints.py done <id> --evidence "commit <sha>, tests N/N"` or `--no-evidence "superseded by <id>"`
+- Updated the audit skill (`skills/audit-loose-ends/SKILL.md`) in two locations
+- Updated `README.md` project overview
+- Updated `tests/test_nudge.sh` to assert the new syntax
+- Fixed a bash command substitution bug in `hooks/nudge.sh` where backticks in the heredoc were
+  being interpreted as command substitution; now uses a proper heredoc with resolved paths
+
+### Testing
+
+- All existing tests pass (test_nudge.sh, test_skill.sh, test_redact_secret.sh, test_audit_scan.py)
+- waypoints plugin's own evidence gate tests (28 tests) all pass
+
 ## [0.6.0] — 2026-09-20
 
 ### Fixed — the scan audited the wrong session, and said nothing about it
