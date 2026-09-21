@@ -114,7 +114,7 @@ Scan each surface and fix drift before closing:
    90 days. These are PROPOSALS, never authoritative state: promoting one into a durable rule is
    approval-gated, so an entry you cannot action is closed or left open honestly, not silently kept.
 6. **The waypoints store** (`~/.claude/waypoints.json`, if the `waypoints` plugin is present): mark
-   finished items done (`waypoints.py done <id>`); **add genuinely-open follow-ups** you'd not want to
+   finished items done (`waypoints.py done <id> --evidence "commit <sha>, tests N/N"` or `--no-evidence "superseded by <id>"`); **add genuinely-open follow-ups** you'd not want to
    lose as new waypoints (`waypoints.py add "…" [--surface-on YYYY-MM-DD]`). Then **release whatever
    is no longer waiting**, and finally **prune** — both below.
 
@@ -212,7 +212,7 @@ banner, so the banner stays precise and false-positive-free.
 ## Finishing an item
 
 Marking something done means marking it done **in whichever surface holds it** — flip the memory's
-flag, tick the note, and `waypoints.py done <id>`. Don't leave the same completion recorded as open in
+flag, tick the note, and `waypoints.py done <id> --evidence "commit <sha>, tests N/N"` (or `--no-evidence "superseded by <id>"`). Don't leave the same completion recorded as open in
 one place and done in another.
 
 ## The point

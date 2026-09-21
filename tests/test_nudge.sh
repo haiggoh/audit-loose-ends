@@ -25,7 +25,8 @@ LC="$(printf '%s' "$CTX" | tr 'A-Z' 'a-z')"
 case "$LC" in *redundant*orphaned*) check 0 "names redundant/orphaned drift";; *) check 1 "names redundant/orphaned drift";; esac
 # The CLI is `waypoints.py` (note the .py) -- the bare name is a different, extensionless
 # launcher that is NOT what the plugin puts on the Bash-tool PATH under that name.
-case "$CTX" in *"waypoints.py done <id>"*) check 0 "references the waypoints CLI";; *) check 1 "references the waypoints CLI";; esac
+# The evidence gate (0.10.0) requires --evidence or --no-evidence to close an item.
+case "$CTX" in *"waypoints.py done <id> --evidence"*) check 0 "references the waypoints CLI";; *) check 1 "references the waypoints CLI";; esac
 case "$CTX" in *"waypoints.py prune"*) check 0 "names prune as part of the routine";; *) check 1 "names prune as part of the routine";; esac
 # Releasing a falsely-parked `waiting` item is the mirror of pruning a done one, so the nudge must
 # name `resolve` -- and must not stop there: `resolve` keys only on the target's done flag, so the
