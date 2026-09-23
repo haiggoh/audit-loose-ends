@@ -50,6 +50,17 @@ check $? "states the scan locates drift without judging it"
 grep -qi 'Steps 1.6 are still the looking\|still the looking' "$SKILL"
 check $? "keeps the surface checks mandatory after the scan"
 
+# --- a credential can land in the TRANSCRIPT, not only in a file ---
+# The file scanner cannot reach this class, so the skill has to carry it. Asserted on the shape of
+# the guidance, not just the word "token", so weakening it to a vague warning fails.
+has "names a credential-bearing endpoint"      '/token'
+has "explains why base64 survives a glance"    'base64'
+has "prescribes testing auth by STATUS"        "%{http_code}"
+grep -qi 'never by content\|never print' "$SKILL"
+check $? "forbids printing the response body"
+grep -qi 'rotat' "$SKILL"
+check $? "names rotation as the remedy once printed"
+
 # --- the standing prune contract must survive this change ---
 has "still documents prune"        'waypoints.py prune'
 has "still documents the archive"  'waypoints.py archive list'

@@ -664,6 +664,70 @@ finally:
         os.environ["CLAUDE_CODE_SESSION_ID"] = _saved_env
     import shutil; shutil.rmtree(_sess_tmp, ignore_errors=True)
 
+
+# --------------------------------------------------------------------- removals, and ABSENCE
+# Two claims that used to render identically: "nothing changed" and "nothing I could recognise".
+# The second is a confession of blindness, and it used to read as a clean bill of health — measured
+# on a real session that DELETED a 37 KB always-loaded instruction file and was told the session
+# changed no tracked file. Each assertion below has a planted positive AND the negative it rejects,
+# per this file's own convention.
+print("== removals and the absence message ==")
+
+_MEM = "/Users/x/.claude/projects/-Users-x/memory/some-rule.md"
+
+# PLANTED POSITIVE: an `rm` of a durable record is detected and named as a REMOVAL.
+_rm = scan_records([rec_bash(f"rm {_MEM}")])
+check(_MEM in _rm.shell_removes, "an rm of a durable record is mined as a removal")
+check(_MEM not in _rm.shell_writes, "a removal is NOT reported as a write")
+_rm_out = render([rec_bash(f"rm {_MEM}")])
+check("REMOVED OR MOVED AWAY" in _rm_out, "the removal reaches the reader in its own section")
+check(_MEM in _rm_out, "the removed path itself is printed")
+
+# NEGATIVE: a scratch path is not worth auditing, and must not create noise in that section.
+_tmp = scan_records([rec_bash("rm /tmp/scratch.md")])
+check(not _tmp.shell_removes, "a /tmp path is not reported as a durable removal")
+check(_tmp.saw_shell_remove_cmd, "...but the command was still SEEN (so absence can be explained)")
+
+# `mv <durable> <elsewhere>` leaves nothing behind, so the SOURCE is a removal.
+_mv = scan_records([rec_bash(f"mv {_MEM} /tmp/elsewhere.md")])
+check(_MEM in _mv.shell_removes, "mv away from a durable path is mined as a removal")
+
+# ★ THE ABSENCE MESSAGE — three distinct states, each asserted against the other two.
+# `> /tmp/note.md` is write-SHAPED and names a path, but /tmp is not a durable surface — so the
+# scan knows a write happened AND knows it recognised nothing. That is exactly the blind case.
+# (A path named only inside a heredoc BODY is traceless: the masking strips the body, so no write
+# construct survives at all and the scan honestly falls through to the quiet message. That
+# residual gap is documented in the skill, and is why the `ls -lt` cross-check is still required.)
+_blind = render([rec_bash("cat > /tmp/note.md <<'EOF'\nhi\nEOF")])
+_quiet = render([rec_read(_MEM)])
+_rm_blind = render([rec_bash("rm /tmp/scratch.md")])
+
+check("no path RECOGNISED" in _blind,
+      "a write command naming nothing durable says NO PATH RECOGNISED, not 'nothing changed'")
+check("gap in THIS scan" in _blind,
+      "...and names itself as a gap in the scan rather than a fact about the session")
+check("no path RECOGNISED" in _rm_blind,
+      "a REMOVE command naming nothing durable also says NO PATH RECOGNISED")
+check("no write or remove command ran either" in _quiet,
+      "a genuinely quiet session gets the OTHER message")
+check("no path RECOGNISED" not in _quiet,
+      "...and is never mislabelled as a blind scan")
+check("changed no tracked file" not in _blind,
+      "the old unconditional 'changed no tracked file' wording is gone from the blind case")
+
+# Found by the pre-merge dogfood: when a removal WAS recognised, the modified-section message must
+# not claim the opposite — a self-contradicting digest points the reader at the wrong worry.
+_rm_found = render([rec_bash(f"rm {_MEM}")])
+check("nothing MODIFIED" in _rm_found,
+      "a recognised removal yields 'nothing MODIFIED' rather than 'no path RECOGNISED'")
+check("no path RECOGNISED" not in _rm_found,
+      "...and does not contradict the REMOVED section printed right below it")
+
+# A real modification must still suppress both empty messages entirely.
+_real = render([rec_delta("/Users/x/.claude/projects/-Users-x/memory", "/t/some-rule.md")])
+check("no path RECOGNISED" not in _real and "none recorded" not in _real,
+      "a session with a real delta prints no absence message at all")
+
 print()
 if _fail:
     print(f"FAILURES: {_fail}")

@@ -204,6 +204,18 @@ Scan each surface and fix drift before closing:
    rather than asserted. `password=`/`token=` hits are report-only unless you pass
    `--include-assignments`. It walks no directories: name the files you touched.
 
+   **A file is not the only place a credential lands — a printed response body is one too.** If the
+   session ran a local service behind auth, check whether it echoed an endpoint that *hands back* the
+   credential. `ttyd`'s `/token` returns the basic-auth pair **base64-encoded**
+   (`{"token":"<base64 user:pass>"}`), so printing that body publishes the password into the
+   transcript; it leaked exactly that way once, while a public tunnel was live, and had to be rotated.
+   Base64 is what makes it survive a glance — it does not read as a secret, and a shape-based scanner
+   will not flag it either. So treat any `/token`, `/session`, `/whoami` or `/debug` route as
+   credential-bearing until proven otherwise, and **test auth by STATUS, never by content**:
+   `curl -o /dev/null -w '%{http_code}'`. The scanner above cannot help here, because the leak is in
+   the transcript rather than in a file you can name — which is why it belongs in the audit rather
+   than in the tool.
+
 ### Hybrid discovery (agent-side, here — never in a startup hook)
 While reconciling, sweep memories/notes for pending markers (`⏳`, `REMAINING`, `TODO`) that aren't
 yet tracked as waypoints and add them. Keep this in the deliberate audit pass, not the startup
