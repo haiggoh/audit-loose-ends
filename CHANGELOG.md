@@ -1,5 +1,71 @@
 # Changelog
 
+## [0.7.0] — 2026-09-23
+
+### Fixed — "nothing found" and "nothing I could recognise" no longer render identically
+
+`DURABLE RECORDS MODIFIED (0 file(s))` printed one sentence — *"none recorded — the session changed no
+tracked file"* — for two completely different facts: that no write happened at all, or that writes
+happened and none named a path the scan recognised. The second is a confession of blindness wearing the
+costume of a clean bill of health, and **the calmer the output looked, the worse the coverage was.**
+
+Measured on a real session that **deleted** `/Users/…/AGENTS.md`, a 37 KB always-loaded instruction
+file, and was told the session changed no tracked file. A deletion of an always-on rule file is
+precisely the change an audit exists to catch. The tool already knew which case it was in
+(`saw_shell_write_cmd`); it just did not say so in the section where the reader actually looks, only as
+a hint in `GAPS` — and a hint is not a finding.
+
+- **Three distinct absence messages** replace the one unconditional sentence: a real modification
+  prints none; a scan that saw write/remove commands but recognised no durable path says
+  **"no path RECOGNISED"**, states that this is *a gap in THIS scan, not evidence that nothing
+  changed*, and prescribes the `ls -lt`/`find -newermt` cross-check; a genuinely quiet session says
+  *"none recorded, and no write or remove command ran either"*.
+
+### Added — removals are mined and reported, in their own section
+
+The write-shaped detectors (`>`, heredoc, `sed -i`, `tee`) **cannot** match a removal: `rm <path>` and
+`mv <durable> <elsewhere>` name a durable path while redirecting nothing. Narrower root cause than the
+heredoc gap, same failure mode, **opposite severity**.
+
+- New `_SHELL_REMOVE_RES` + `_mine_shell_removes()`, tracked in `shell_removes` **separately from**
+  `shell_writes`: "this file was deleted" and "this file was edited" call for different follow-up, and
+  conflating them would imply an edit where there is now nothing to audit.
+- New report section **`DURABLE RECORDS REMOVED OR MOVED AWAY BY A SHELL COMMAND`**, flagged ⚠️ because
+  a deleted record cannot be audited later. `GAPS` adds whether those paths are gone *now* — a later
+  step may have restored them.
+- The surface filter is factored into `_durable_target()` and shared by both miners, so they cannot
+  diverge into one reporting scratch files while the other stays quiet.
+- **A fourth absence message, found by the pre-merge dogfood itself:** when a removal *was* recognised,
+  claiming "no path RECOGNISED" contradicts the REMOVED section printed directly below it and points the
+  reader at the wrong worry. That case now reads *"nothing MODIFIED — but see REMOVED below: this
+  session's durable change was a deletion, not an edit."* Worth recording because it is the argument for
+  dogfooding before merging rather than after: five mutation-tested assertions and five green suites did
+  not surface it — running the thing on the real incident did, in one read.
+
+### Added — a credential can land in the TRANSCRIPT, not only in a file
+
+`redact-secret.py` scans files you can name; it cannot reach a secret that was **printed**. So the
+skill's step 6 now covers it: an endpoint can hand back the credential — `ttyd`'s `/token` returns the
+basic-auth pair **base64-encoded**, so printing that body publishes the password. It leaked exactly
+that way once while a public tunnel was live and had to be rotated. Base64 is what makes it survive a
+glance: it does not read as a secret, and a shape-based scanner will not flag it either. Treat any
+`/token`, `/session`, `/whoami` or `/debug` route as credential-bearing, and **test auth by STATUS,
+never by content** (`curl -o /dev/null -w '%{http_code}'`).
+
+### Testing
+
+`tests/test_audit_scan.py` +16 assertions (planted positive **and** rejected negative for each, per
+this suite's standing convention); `tests/test_skill.sh` +5. Every new property was
+**mutation-tested**: reverting the absence fix, dropping the REMOVED section, disabling the removal
+miner, letting removals leak into writes, dropping the `/tmp` surface filter, and collapsing the recognised-removal branch each fail
+the suite (6/6 caught); the five skill assertions likewise fail when the guidance is weakened (5/5 caught).
+The new tests are inserted **before** the file's summary block, since this suite ends in a
+`SystemExit` and anything appended after it would never run while the suite still printed green.
+
+One honest residual, documented in the fixture: a path named only inside a **heredoc body** is
+traceless — prose-masking strips the body, so no write construct survives and the scan falls through to
+the quiet message. That is why the `ls -lt` cross-check remains prescribed rather than deprecated.
+
 ## [0.6.1] — 2026-09-21
 
 ### Fixed — waypoints 0.10.0 evidence gate compatibility

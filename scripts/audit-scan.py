@@ -107,6 +107,19 @@ _SHELL_WRITE_RES = (
     re.compile(_CMDPOS + r"(?:mv|cp|install)\s+(?:-\S+\s+)*\S+\s+([\w./~$-]+)"),
 )
 
+# REMOVALS are mined separately from writes, because a deletion is not a write and the
+# write-shaped patterns above cannot match one: `rm <path>` and `mv <durable> <elsewhere>` name a
+# durable path while redirecting nothing. Measured 2026-09-22 — a session that deleted a 37 KB
+# always-loaded AGENTS.md reported "the session changed no tracked file", which is the single
+# worst thing an audit can say about the change it most exists to catch. Kept in its own bucket so
+# the report can say REMOVED rather than implying an edit.
+_SHELL_REMOVE_RES = (
+    # `rm [-flags] path...` — every argument is a target, so all are captured for later splitting
+    re.compile(_CMDPOS + r"rm\s+((?:-\S+\s+)*[\w./~$-]+(?:\s+[\w./~$-]+)*)"),
+    # a move AWAY from a durable path leaves nothing there; the destination is caught above
+    re.compile(_CMDPOS + r"mv\s+(?:-\S+\s+)*([\w./~$-]+)\s+\S+"),
+)
+
 CMD_PATTERNS = [
     ("waypoints",  re.compile(_CMDPOS + r"waypoints(?:\.py)?\s+(?!--help|-h\b)\S+")),
     ("git-commit", re.compile(_CMDPOS + r"git\s[^\n|;&]*\bcommit\b")),
@@ -541,6 +554,8 @@ class Scan:
         # never conflated in the report.
         self.shell_writes = collections.Counter()   # abs path -> times named
         self.saw_shell_write_cmd = False            # did any write-shaped shell command appear?
+        self.shell_removes = collections.Counter()  # abs path -> times named as a removal target
+        self.saw_shell_remove_cmd = False           # did any removal-shaped shell command appear?
         self.tools = collections.Counter()
         self.cmds = collections.defaultdict(list)   # category -> [command]
         self.readonly_git = 0
@@ -664,6 +679,7 @@ class Scan:
             return
         probe = shell_only(cmd)
         self._mine_shell_writes(probe, cmd)
+        self._mine_shell_removes(probe, cmd)
         subj = _subject_of(cmd)
         subj_tail = SUBJ_MARK + " ".join(subj.split())[:200] if subj else ""
         if AUTOMATION_READONLY.search(probe):
@@ -709,18 +725,43 @@ class Scan:
                     if not base:
                         continue
                     tgt = os.path.join(base, tgt)
-                tgt = canon(os.path.expanduser(tgt))
-                surface = classify(tgt)
-                # The `docs` surface is `*.md`/`*.txt`/`*.rst`, which a scratch file in /tmp
-                # satisfies — and `> /tmp/x.txt` is one of the commonest lines in any session.
-                # A delta record for such a file is still worth reporting (something really
-                # changed), but a merely-NAMED temp path is noise, and noise in this section
-                # trades the false negative this fix exists for against a false positive.
-                if surface == "other":
-                    continue
-                if tgt.startswith(("/private/tmp/", "/private/var/", "/tmp/", "/var/")):
-                    continue
-                self.shell_writes[tgt] += 1
+                tgt = self._durable_target(tgt)
+                if tgt:
+                    self.shell_writes[tgt] += 1
+
+    def _durable_target(self, tgt):
+        """Canonicalize a shell path argument, or return None if it is not worth auditing.
+
+        Shared by the write and removal miners so the two apply exactly the same surface filter —
+        a divergence here would make one of them report scratch files while the other stayed quiet.
+        The `docs` surface is `*.md`/`*.txt`/`*.rst`, which a scratch file in /tmp satisfies, and
+        `> /tmp/x.txt` is one of the commonest lines in any session. A delta record for such a file
+        is still worth reporting (something really changed), but a merely-NAMED temp path is noise,
+        and noise here trades the false negative this exists for against a false positive."""
+        tgt = canon(os.path.expanduser(tgt))
+        if classify(tgt) == "other":
+            return None
+        if tgt.startswith(("/private/tmp/", "/private/var/", "/tmp/", "/var/")):
+            return None
+        return tgt
+
+    def _mine_shell_removes(self, probe, raw):
+        """Pull REMOVAL targets out of a shell command. See _SHELL_REMOVE_RES for why separate."""
+        for rx in _SHELL_REMOVE_RES:
+            for m in rx.finditer(probe):
+                for tgt in m.group(1).split():
+                    if not tgt or tgt.startswith(("$", "-")) or tgt in ("/dev/null",):
+                        continue
+                    self.saw_shell_remove_cmd = True
+                    if not os.path.isabs(tgt) and not tgt.startswith("~"):
+                        base = self.cur_cwd or (self.cwds.most_common(1)[0][0]
+                                                if self.cwds else None)
+                        if not base:
+                            continue
+                        tgt = os.path.join(base, tgt)
+                    tgt = self._durable_target(tgt)
+                    if tgt:
+                        self.shell_removes[tgt] += 1
 
     def run(self):
         with open(self.path, "r", encoding="utf-8", errors="replace") as fh:
@@ -828,8 +869,30 @@ def report(scans, args):
                 rows.append(f"  (--json lists all {len(group)} individually)")
             else:
                 rows.extend("  " + x for x in group)
+        # ★ "nothing found" and "nothing I could RECOGNISE" are different facts and must not
+        # render identically. The old unconditional wording claimed the first while often meaning
+        # the second, so a blind scan read as a clean bill of health — and the calmer the output
+        # looked, the worse the coverage was. Measured on a session that DELETED an always-loaded
+        # instruction file. The tool already knew which case it was in (saw_shell_write_cmd), it
+        # just did not say so here, where the reader actually looks.
+        if touched:
+            empty_msg = None
+        elif s.shell_removes:
+            # Found during the pre-merge dogfood: claiming "no path RECOGNISED" while the REMOVED
+            # section below names one is self-contradictory, and the contradiction points the reader
+            # at the wrong worry. Nothing was MODIFIED, but something was found — say which.
+            empty_msg = ("nothing MODIFIED — but see REMOVED below: this session's durable change "
+                         "was a deletion,\n  not an edit.")
+        elif s.saw_shell_write_cmd or s.saw_shell_remove_cmd:
+            empty_msg = ("no path RECOGNISED — write/remove commands DID run, but none named a "
+                         "path on a durable surface.\n  This is a gap in THIS scan, not evidence "
+                         "that nothing changed: a path named only inside a\n  heredoc body is "
+                         "invisible here. Cross-check with `ls -lt`/`find -newermt` over the "
+                         "span.")
+        else:
+            empty_msg = "none recorded, and no write or remove command ran either"
         _section(out, f"DURABLE RECORDS MODIFIED ({len(touched)} file(s))", rows,
-                 empty="none recorded — the session changed no tracked file")
+                 empty=empty_msg)
 
         mentioned_only = sorted(p for p, n in s.files.items() if n == 0 and p not in touched)
         if mentioned_only:
@@ -846,6 +909,15 @@ def report(scans, args):
             _section(out, "DURABLE RECORDS WRITTEN BY A SHELL COMMAND "
                           "(lower confidence — a named path is weaker evidence than a delta)",
                      [f"{sp}   [{classify(sp)}]" for sp in shell_only_writes])
+
+        # Removals get their own section rather than joining the writes: "this file was deleted"
+        # and "this file was edited" call for completely different follow-up, and a deletion of a
+        # durable record is the higher-severity finding of the two.
+        shell_removes = sorted(s.shell_removes)
+        if shell_removes:
+            _section(out, "DURABLE RECORDS REMOVED OR MOVED AWAY BY A SHELL COMMAND "
+                          "(⚠️  verify — a deleted record cannot be audited later)",
+                     [f"{sp}   [{classify(sp)}]" for sp in shell_removes])
 
         for cat in ("waypoints", "git-commit", "git-push", "git-tag", "release",
                     "plugin", "automation", "destructive"):
@@ -907,11 +979,14 @@ def report(scans, args):
             out.append(f"  · whether the {len(shell_only_writes)} shell-written path(s) above were "
                        "really MODIFIED — the")
             out.append("    command names them, but no delta record confirms the write landed")
-        elif s.saw_shell_write_cmd:
-            out.append("  · write-shaped shell commands ran, but named no path on a durable "
-                       "surface")
+        elif s.saw_shell_write_cmd or s.saw_shell_remove_cmd:
+            out.append("  · write/remove-shaped shell commands ran, but named no path on a "
+                       "durable surface")
         else:
             out.append("  · anything from a file written by a shell redirect with no tool record")
+        if shell_removes:
+            out.append(f"  · whether the {len(shell_removes)} removed path(s) above are gone NOW "
+                       "— a later step may have restored them")
         out.append("  · the session's reasoning or intent — use --quote, or cc-transcript, for that")
         if _RED is None:
             out.append("  · ⚠️  redaction was UNAVAILABLE, so quoted text above is unfiltered")
