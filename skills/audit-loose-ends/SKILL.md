@@ -104,6 +104,16 @@ Scan each surface and fix drift before closing:
    orphans)? Any entry describing finished work as pending/⏳/REMAINING/TODO? Any redundant/duplicate
    memory? **Distinguish a historical completion record (keep as-is) from a stale pending flag on
    finished work (fix).**
+
+   Run the generalized index auditor before and after memory edits:
+
+   ```sh
+   "$CLAUDE_PLUGIN_ROOT/scripts/memory-index-audit.py" --stale-desc [--reviewed "$CLAUDE_PLUGIN_ROOT/scripts/memory-index-reviewed.txt"]
+   ```
+
+   - `--stale-desc` flags any memory whose body announces a correction not reflected in `MEMORY.md`
+   - `--reviewed` suppresses known exceptions (one filename per line; inline `# comments` stripped)
+   - Exits 1 on orphans/broken links; read-only; `--help` exits 0 with usage.
 2. **Project notes** (e.g. `PROJECT-NOTES.md` in the relevant repos): do "remaining"/"next" lists
    still list things that are done?
 3. **Reminders / crons / scheduled tasks**: still needed, or fired-and-forgotten?
