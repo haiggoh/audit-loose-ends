@@ -41,6 +41,9 @@ surface, the waypoints commands run, commits/pushes/tags/releases by repo and su
 that was actually *changed* as opposed to merely inspected, the task list's end state, and a GAPS
 section naming what it cannot know.
 
+**It tells you WHERE, never WHETHER.** The scanner reports which files changed; it cannot judge
+whether the change was correct or whether an index entry is missing. That judgment is Steps 1–6.
+
 **Two sections, two confidence levels — read them differently.** `DURABLE RECORDS MODIFIED` is backed
 by a change record. `DURABLE RECORDS WRITTEN BY A SHELL COMMAND` is inferred from a path appearing in
 a `>`/heredoc/`sed -i`/`tee` command, which is weaker: the command may have failed, been a dry run, or
@@ -49,6 +52,8 @@ alternative was worse — before 0.5.6 they were reported **not at all**, so a s
 memory files through heredocs showed one, and a short list read as *"nothing changed"* when it meant
 *"nothing changed through a tool I parse"*. That inverts the tool's premise, and it bites hardest in
 auto-mode sessions, which are instructed to prefer `sed`/heredoc over the Edit tool.
+
+**Lesson candidates.** The scanner prints a `lessons: N candidates (c corrections, r retries, d decisions, s self-corrections)` summary line. If N>0, one line at end of pass: "N lesson candidates found (c corrections, r retries, d decisions, s self-corrections) — run harvest-lessons? (~N×1.5K budgeted)". Otherwise say nothing. The harvest-lessons sub-skill is opt-in and budgeted.
 
 **The residual blind spot, worth knowing because it is invisible.** A path that appears only *inside*
 a heredoc body — `cat > /tmp/patch.py <<'PY'` where the Python then rewrites a memory file — is still
@@ -179,6 +184,14 @@ Scan each surface and fix drift before closing:
    closures. It is safe by construction: archived items stay readable and `waypoints.py reopen <id>`
    brings one back in one step. If the count looks wrong afterwards, `waypoints.py journal` says
    which command moved what.
+
+   **Residual-scope redundancy check (skill-obs #8).** For any item that was retargeted, partly
+   completed, or re-scoped, compare what REMAINS against the full scope of sibling items in the
+   same project. If the remainder is a subset of a sibling, close the retargeted item with its
+   achieved outcome and transfer priority, rather than leaving two owners. Tell: bullets like
+   "remaining scope = X" / "residual is Y" where X or Y names a whole other item. A title-level
+   or status-level sweep will not find this — the redundancy is only visible by comparing residual
+   scope against sibling scope.
 
    **SOFT DEPENDENCY — probe, never assume.** This skill must work unchanged on a machine that
    does not have waypoints, so do not run any `waypoints.py` command until you have confirmed it
