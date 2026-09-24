@@ -728,6 +728,167 @@ _real = render([rec_delta("/Users/x/.claude/projects/-Users-x/memory", "/t/some-
 check("no path RECOGNISED" not in _real and "none recorded" not in _real,
       "a session with a real delta prints no absence message at all")
 
+# --------------------------------------------------------------------------- memory-index-audit.py
+
+print("== memory-index-audit.py ==")
+
+MIDX = os.path.join(HERE, "..", "scripts", "memory-index-audit.py")
+
+def run_midx(args, cwd=None):
+    cmd = [sys.executable, MIDX] + args
+    return subprocess.run(cmd, capture_output=True, text=True, timeout=30, cwd=cwd)
+
+# --help exits 0 and prints usage
+r = run_midx(["--help"])
+eq(r.returncode, 0, "--help exits 0")
+check("Usage:" in r.stdout, "--help prints usage")
+
+# Unknown flag exits non-zero
+r = run_midx(["--no-such-flag"])
+eq(r.returncode, 2, "unknown flag exits 2")
+
+# Test with a temp memory directory
+import tempfile
+import shutil
+
+with tempfile.TemporaryDirectory() as td:
+    mem_dir = os.path.join(td, "memory")
+    os.makedirs(mem_dir)
+
+    # Write a MEMORY.md with some entries
+    idx = os.path.join(mem_dir, "MEMORY.md")
+    with open(idx, "w") as f:
+        f.write("- [Fact one](fact-one.md)\n")
+        f.write("- [Fact two](fact-two.md)\n")
+        f.write("- [Project item](project-item.md)\n")
+
+    # Create the memory files
+    for name in ["fact-one.md", "fact-two.md", "project-item.md"]:
+        with open(os.path.join(mem_dir, name), "w") as f:
+            f.write("---\n")
+            f.write("type: reference\n")
+            f.write("description: A test fact\n")
+            f.write("---\n")
+            f.write("Body\n")
+
+    # Basic run
+    r = run_midx(["--dir", mem_dir])
+    eq(r.returncode, 0, "basic run exits 0")
+    check("MEMORY.md" in r.stdout, "output mentions index")
+    check("headroom" in r.stdout, "output shows headroom")
+
+    # --json output
+    r = run_midx(["--dir", mem_dir, "--json"])
+    eq(r.returncode, 0, "--json exits 0")
+    payload = json.loads(r.stdout)
+    check("bytes" in payload, "json has bytes")
+    check("entries" in payload, "json has entries")
+    eq(payload["entries"], 3, "json counts 3 entries")
+    check("orphans" in payload, "json has orphans")
+    check("broken" in payload, "json has broken")
+
+    # --stale-desc with a memory that has correction in body but not description
+    with open(os.path.join(mem_dir, "fact-one.md"), "w") as f:
+        f.write("---\n")
+        f.write("type: reference\n")
+        f.write("description: A test fact\n")
+        f.write("---\n")
+        f.write("CORRECTED: this was wrong\n")
+
+    r = run_midx(["--dir", mem_dir, "--stale-desc"])
+    eq(r.returncode, 0, "--stale-desc exits 0")
+    check("fact-one.md" in r.stdout, "stale-desc flags the corrected memory")
+
+    # --reviewed file suppresses the flag
+    reviewed = os.path.join(td, "reviewed.txt")
+    with open(reviewed, "w") as f:
+        f.write("fact-one.md\n")
+
+    r = run_midx(["--dir", mem_dir, "--stale-desc", "--reviewed", reviewed])
+    eq(r.returncode, 0, "--reviewed exits 0")
+    # The stale-desc flag should NOT appear in output (no ⚠ BODY ANNOUNCES warning)
+    check("⚠ BODY ANNOUNCES" not in r.stdout, "reviewed file suppresses stale-desc flag")
+
+    # Orphan detection: file on disk but not in index
+    with open(os.path.join(mem_dir, "orphan.md"), "w") as f:
+        f.write("---\n")
+        f.write("type: project\n")
+        f.write("description: Orphan\n")
+        f.write("---\n")
+
+    r = run_midx(["--dir", mem_dir])
+    eq(r.returncode, 1, "orphan makes exit 1")
+    check("orphan.md" in r.stdout, "orphan is reported")
+
+    # Broken link: in index but not on disk
+    with open(idx, "a") as f:
+        f.write("- [Broken](missing.md)\n")
+
+    r = run_midx(["--dir", mem_dir])
+    eq(r.returncode, 1, "broken link makes exit 1")
+    check("missing.md" in r.stdout, "broken link is reported")
+
+# --------------------------------------------------------------------------- chained cd resolution (the 09-24 fix)
+
+print("== chained cd resolution ==")
+
+# Shape 1: cd target && write (absolute cd, then relative write)
+MEM = "/Users/bra0002h/.claude/projects/-Users-bra0002h/memory"
+s = scan_records([rec_bash(f'cd {MEM} && cat > permission-classifier-and-allowlist.md <<"EOF"\nbody\nEOF')])
+eq(s.shell_writes.get(f"{MEM}/permission-classifier-and-allowlist.md"), 1,
+   "absolute cd then relative write resolves against cd target")
+
+# Shape 2: cd a && cd b && write (chained absolute cds, then relative write)
+s = scan_records([rec_bash(
+    f'cd /Users/bra0002h/.claude && cp -p projects/-Users-bra0002h/memory/X ref && '
+    f'cd projects/-Users-bra0002h/memory && cat > local-llm-plan-project.md <<"EOF"\nbody\nEOF'
+)])
+eq(s.shell_writes.get(f"{MEM}/local-llm-plan-project.md"), 1,
+   "chained cds update base in order before resolving relative write")
+# The bug was: this resolved against a cwd that already had the relative segment,
+# producing a doubled path like /Users/bra0002h/.claude/projects/.../memory/projects/.../memory/...
+check(not any(p.count("memory") > 2 for p in s.shell_writes),
+      "no doubled path segments from chained cd")
+
+# Shape 3: semicolon separator also chains cwd
+s = scan_records([rec_bash(f'cd {MEM}; cat > semicolon-test.md <<"EOF"\nbody\nEOF')])
+eq(s.shell_writes.get(f"{MEM}/semicolon-test.md"), 1,
+   "semicolon separator chains cwd like &&")
+
+# Shape 4: multiple cds with semicolon
+s = scan_records([rec_bash(
+    f'cd /Users/bra0002h/.claude; cd projects/-Users-bra0002h/memory; '
+    f'cat > semicolon-chained.md <<"EOF"\nbody\nEOF'
+)])
+eq(s.shell_writes.get(f"{MEM}/semicolon-chained.md"), 1,
+   "chained semicolon cds update base in order")
+
+# Shape 5: relative cd after absolute cd
+s = scan_records([rec_bash(
+    f'cd /Users/bra0002h/.claude && cd projects/-Users-bra0002h/memory && '
+    f'cat > relative-cd.md <<"EOF"\nbody\nEOF'
+)])
+eq(s.shell_writes.get(f"{MEM}/relative-cd.md"), 1,
+   "relative cd after absolute cd joins the base")
+
+# Shape 6: cd with tilde
+s = scan_records([rec_bash('cd ~/repo && cat > tilde-test.md <<"EOF"\nbody\nEOF')])
+# The base should expand ~ to the home dir
+home = os.path.expanduser("~")
+eq(s.shell_writes.get(f"{home}/repo/tilde-test.md"), 1,
+   "cd with tilde expands correctly")
+
+# Shape 7: cd in subshell — we don't track subshell scope, so inner cd affects resolution
+# This is a known limitation (not worth the complexity to track parens). The test documents
+# current behavior: all cd commands in the probe are applied in order.
+# Use a durable path (not /tmp or /var) so it passes _durable_target filter.
+# The session's dominant cwd is /Users/x/repo, so the first cd /Users/bra0002h/.claude
+# resets the base, then the relative cd joins it.
+s = scan_records([rec_bash('cd /Users/bra0002h/.claude && (cd projects/-Users-bra0002h/memory && cat > subshell.md <<"EOF"\nbody\nEOF')])
+# The probe sees both cds, so the write resolves against the inner cd target
+eq(s.shell_writes.get(f"{MEM}/subshell.md"), 1,
+   "all cd commands apply in order; subshell scope not tracked (known limitation)")
+
 print()
 if _fail:
     print(f"FAILURES: {_fail}")

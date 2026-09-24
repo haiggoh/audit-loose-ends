@@ -718,10 +718,11 @@ class Scan:
                 if not tgt or tgt.startswith("$") or tgt in ("/dev/null", "/dev/stderr"):
                     continue
                 self.saw_shell_write_cmd = True
-                # a bare relative path cannot be resolved without knowing the cwd at that moment;
-                # anchor it on the session's dominant cwd, same rule the delta handler uses.
+                # Resolve relative paths against the cwd IN EFFECT at the position of the match.
+                # This handles chained `cd` commands: `cd a && cd b && cat > file` resolves `file`
+                # against the cwd after both cds, not the session's dominant cwd.
                 if not os.path.isabs(tgt) and not tgt.startswith("~"):
-                    base = self.cur_cwd or (self.cwds.most_common(1)[0][0] if self.cwds else None)
+                    base = self._cwd_at_position(probe, m.start())
                     if not base:
                         continue
                     tgt = os.path.join(base, tgt)
@@ -745,6 +746,32 @@ class Scan:
             return None
         return tgt
 
+    def _cwd_at_position(self, probe, pos):
+        """Compute the effective cwd at a given character position in the command.
+
+        Parses the command up to `pos`, applying each `cd` in order. Absolute `cd` resets
+        the base; relative `cd` joins it. Returns the session's dominant cwd if no cd
+        is found before the position.
+        """
+        # Start with the session's dominant cwd
+        base = self.cur_cwd or (self.cwds.most_common(1)[0][0] if self.cwds else None)
+        if not base:
+            return None
+
+        # Look at the portion of the command up to the match position
+        prefix = probe[:pos]
+
+        # Find all cd commands in the prefix
+        for m in _CD_RE.finditer(prefix):
+            cd_target = m.group(1).rstrip("/;&|\"'")
+            if os.path.isabs(cd_target) or cd_target.startswith("~"):
+                base = os.path.expanduser(cd_target)
+            else:
+                base = os.path.join(base, cd_target)
+            base = os.path.normpath(base)
+
+        return base
+
     def _mine_shell_removes(self, probe, raw):
         """Pull REMOVAL targets out of a shell command. See _SHELL_REMOVE_RES for why separate."""
         for rx in _SHELL_REMOVE_RES:
@@ -754,8 +781,7 @@ class Scan:
                         continue
                     self.saw_shell_remove_cmd = True
                     if not os.path.isabs(tgt) and not tgt.startswith("~"):
-                        base = self.cur_cwd or (self.cwds.most_common(1)[0][0]
-                                                if self.cwds else None)
+                        base = self._cwd_at_position(probe, m.start())
                         if not base:
                             continue
                         tgt = os.path.join(base, tgt)

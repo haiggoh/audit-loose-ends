@@ -1,5 +1,34 @@
 # Changelog
 
+## [0.8.0] — 2026-09-24
+
+### Fixed — phantom/doubled paths for shell writes after chained `cd`
+
+The `DURABLE RECORDS WRITTEN BY A SHELL COMMAND` section reported paths that never existed:
+
+- `/Users/bra0002h/.claude/local-session-self-identification.md` (really written in `~/.claude/projects/-Users-bra0002h/memory/`)
+- `/Users/bra0002h/.claude/permission-classifier-and-allowlist.md` (same)
+- `…/memory/projects/-Users-bra0002h/memory/local-llm-plan-project.md` (and 2 more): a **doubled** prefix.
+
+The command shapes that produced them:
+- `cd /Users/bra0002h/.claude/projects/-Users-bra0002h/memory && cat > file <<'EOF'` — resolved against the session's dominant cwd (`~/.claude`) instead of the `cd` target, because the heredoc body was masked before the `cd` was applied.
+- `cd /Users/bra0002h/.claude && ... && cd projects/-Users-bra0002h/memory && ...` — a relative path was resolved against a cwd that already included the relative segment, which doubled it.
+
+**Fix:** `_cwd_at_position()` now parses the command prefix up to each write/remove match, applying every `cd` in order. Absolute `cd` resets the base; relative `cd` joins it. Semicolon and `&&` separators both chain cwd updates. A known limitation: subshell scope is not tracked (all `cd` in the masked command apply in order).
+
+Tests: planted fixture transcripts for all four shapes (absolute `cd`, chained `cd`, semicolon, semicolon-chained, relative `cd` after absolute, tilde expansion). Mutation-tested every new assertion. Dogfood-verified on the incident transcript `15e51af4` — all listed paths now exist on disk.
+
+### Added — `memory-index-audit.py` generalized and wired into memory step
+
+New standalone script `scripts/memory-index-audit.py` that:
+- Derives the memory directory from cwd (`../projects/*/memory/`) rather than a hardcoded path.
+- Accepts `--reviewed <file>` to suppress known stale-description exceptions (the file lists one filename per line; inline `# comments` are stripped).
+- Exits 1 on orphans/broken links; `--stale-desc` flags a memory whose body announces a correction not reflected in `MEMORY.md`.
+- `--help` exits 0 with usage; unknown flag exits 2.
+- Writes nothing; read-only.
+
+Wired into the audit skill's memory step (see SKILL.md changes).
+
 ## [0.7.0] — 2026-09-23
 
 ### Fixed — "nothing found" and "nothing I could recognise" no longer render identically

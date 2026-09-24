@@ -1,0 +1,7 @@
+# Reviewed stale-desc exceptions (one per line, # comments allowed)
+# These memories have body corrections that don't change the recall hook's meaning
+budget-tally-sessionstart-hook.md   # SUPERSEDED = ledger record width, not the hook's purpose
+code-desktop-sync-project.md        # NO LONGER EXISTS = an old ad-hoc path, historical
+concurrent-agent-coordination.md    # CORRECTED = one incident's diagnosis, rule unchanged
+kimi-roster-feasibility.md          # CORRECTED = a think-tag detail, not the feasibility verdict
+memory-index-is-not-a-changelog.md  # self-reference: it DESCRIBES this check
