@@ -29,6 +29,37 @@ New standalone script `scripts/memory-index-audit.py` that:
 
 Wired into the audit skill's memory step (see SKILL.md changes).
 
+### Added — `audit-scan.py --lessons` deterministic lesson candidate mining
+
+New `--lessons` flag that scans transcripts for five deterministic signals, no LLM calls:
+- **correction**: user prompt redirects ("no,", "that's wrong", "actually", "instead", "why did you", "I said", "don't")
+- **retry-after-fail**: a tool error followed within ≤3 calls by a DIFFERENT command toward the same target (excludes identical retries)
+- **decision**: AskUserQuestion answers (the user's choice plus any free-text note)
+- **self-correction**: assistant text containing "CORRECTED", "turned out", "was wrong", "disproved", "false negative", "premise had decayed"
+- **schema-error**: tool input validation errors (e.g., "Expected array, got str")
+
+Output: `LESSON CANDIDATES (N)` section with line addresses and ≤160-char excerpts, plus a summary line the main skill reads:
+`lessons: N candidates (c corrections, r retries, d decisions, s self-corrections, e schema-errors)`
+
+If N>0, the main skill prints one line at end of pass: "N lesson candidates found — run harvest-lessons? (~N×1.5K budgeted)". Never runs automatically.
+
+Tests: planted fixture transcripts for each signal (positive AND negative — identical retries and code-span "no" must NOT count). Mutation-tested every new assertion.
+
+### Added — `skills/harvest-lessons/SKILL.md` opt-in budgeted sub-skill
+
+Consumes `--lessons` output, fetches context with `--quote` (capped at candidates × budget), promotes validated lessons to the correct layer (CLAUDE.md / memory / rule-governing plugin), writes skill-improvement lessons to task-observer log (soft dependency), checks memory headroom before writing. Includes `--budget`, `--dry-run`, `--categories` flags.
+
+### Added — Local record repos commit step (Step F / Step 7)
+
+New general reconciliation step for durable record directories outside project repos (default: `~/.claude/plans/`):
+- **If git repo**: `status --porcelain -z`, `redact-secret.py --scan-only` new/changed files, stage **by path** (never `-A`), commit with summary. No remote, no push. Skip files modified <2 min ago.
+- **If not a repo, on FIRST invocation**: explain benefit (49 of 51 deleted plans only in git history), ask via AskUserQuestion: (1) set up now (recommended), (2) snooze, (3) never ask again. Durable choice stored in `~/.claude/.audit-loose-ends/record-repos.json` (visible, not hidden).
+- Soft and probe-first: absent `git` → skip silently.
+
+### Added — task-observer activation nudge (E1)
+
+Probe-first line in `hooks/nudge.sh`: if task-observer skill exists (standalone or plugin), append "invoke task-observer before your first substantive tool use" to SessionStart nudge. No new hook registration (reuses existing plugin hook). Silent when skill absent. **Once task-observer ships its own hook (E-upstream), this nudge goes SILENT** when that hook is present — detected by checking installed task-observer plugin for `hooks/hooks.json`.
+
 ## [0.7.0] — 2026-09-23
 
 ### Fixed — "nothing found" and "nothing I could recognise" no longer render identically

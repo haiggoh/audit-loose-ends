@@ -239,6 +239,41 @@ Scan each surface and fix drift before closing:
    the transcript rather than in a file you can name — which is why it belongs in the audit rather
    than in the tool.
 
+7. **Local record repos** (`~/.claude/plans/`, and any other durable record directories outside
+   project repos): committed and clean? This is a general plugin step, not audit-loose-ends specific,
+   but lives here because it's the reconciliation pass.
+
+   **SOFT DEPENDENCY — probe for git first.** Absent `git` → skip silently.
+
+   ```sh
+   command -v git >/dev/null 2>&1 || { echo "git not found, skipping local record repos step"; exit 0; }
+   ```
+
+   Target surface: directories in `$RECORD_REPOS` (default: `~/.claude/plans/`). Keep the list in one
+   constant so it can grow.
+
+   **If it is already a git repo:** at wrap-up, `status --porcelain -z`; if non-empty,
+   `redact-secret.py --scan-only` the new/changed files, stage **by path** (`xargs -0 git add --` /
+   `git rm --cached --`, `core.quotepath=off`), and commit with a summary. **Never add a remote,
+   never push.** **Skip files modified in the last ~2 minutes** and name them in the report: another
+   session may still be writing them (observed 2026-09-24, an NVIDIA test plan appeared mid-wrap-up).
+
+   **If it is not a repo, on FIRST invocation**, explain the benefit in 2–3 lines (measured case: 49
+   of 51 deleted plans existed nowhere else except in git history) and ask, using AskUserQuestion:
+   1. **Set it up now (recommended)**: `git init`, an initial commit by path, no remote.
+   2. **Ask me again another time**: snooze. Re-ask after N sessions or days; pick one and document it.
+   3. **Never ask again**: durably disables this step on this installation.
+
+   **Durable choice must be VISIBLE, not hidden state** (no-hidden-changes): store it in a small
+   documented file, e.g. `~/.claude/.audit-loose-ends/record-repos.json`
+   (`{"~/.claude/plans": {"state": "never"|"snoozed"|"enabled", "since": "YYYY-MM-DD"}}`). The skill
+   says where it lives and how to re-enable it, and a tiny `record-repos` subcommand can show and
+   reset it. A declined step prints nothing; it must not keep nagging.
+
+   The per-user memory `plans-dir-is-local-git-repo` then keeps only the machine-specific fact (this
+   repo exists, and the 49 recovered plans) and points at the plugin step. No duplicated rule
+   (where-rules-live).
+
 ### Hybrid discovery (agent-side, here — never in a startup hook)
 While reconciling, sweep memories/notes for pending markers (`⏳`, `REMAINING`, `TODO`) that aren't
 yet tracked as waypoints and add them. Keep this in the deliberate audit pass, not the startup
