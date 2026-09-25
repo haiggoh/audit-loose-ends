@@ -809,6 +809,30 @@ with tempfile.TemporaryDirectory() as td:
     # The stale-desc flag should NOT appear in output (no ⚠ BODY ANNOUNCES warning)
     check("⚠ BODY ANNOUNCES" not in r.stdout, "reviewed file suppresses stale-desc flag")
 
+    # frontmatter stale_desc_reviewed suppresses the flag (no --reviewed file needed)
+    # First, RESET fact-one.md so it doesn't have CORRECTED anymore (otherwise it would still flag)
+    with open(os.path.join(mem_dir, "fact-one.md"), "w") as f:
+        f.write("---\n")
+        f.write("type: reference\n")
+        f.write("description: A test fact\n")
+        f.write("---\n")
+        f.write("Body\n")
+
+    with open(os.path.join(mem_dir, "fact-two.md"), "w") as f:
+        f.write("---\n")
+        f.write("type: reference\n")
+        f.write("description: A test fact\n")
+        f.write("metadata:\n")
+        f.write("  stale_desc_reviewed: reason here\n")
+        f.write("---\n")
+        f.write("CORRECTED: this was wrong\n")
+
+    r = run_midx(["--dir", mem_dir, "--stale-desc"])
+    eq(r.returncode, 0, "frontmatter stale_desc_reviewed exits 0")
+    # The file WILL be in stdout (as a normal indexed entry), but the WARNING should not be
+    check("⚠ BODY ANNOUNCES" not in r.stdout,
+          "frontmatter stale_desc_reviewed suppresses stale-desc warning")
+
     # Orphan detection: file on disk but not in index
     with open(os.path.join(mem_dir, "orphan.md"), "w") as f:
         f.write("---\n")
@@ -888,6 +912,87 @@ s = scan_records([rec_bash('cd /Users/bra0002h/.claude && (cd projects/-Users-br
 # The probe sees both cds, so the write resolves against the inner cd target
 eq(s.shell_writes.get(f"{MEM}/subshell.md"), 1,
    "all cd commands apply in order; subshell scope not tracked (known limitation)")
+
+# --------------------------------------------------------------------------- lessons mining (--lessons)
+
+print("== lessons mining ==")
+
+# Test fixture with lesson signals
+lesson_transcript = []
+lesson_transcript.append(rec_bash('echo "start"'))
+
+# 1. User prompt correction (last-prompt)
+lesson_transcript.append({"type": "last-prompt", "timestamp": "2026-09-07T10:00:00Z",
+                          "sessionId": "test-sess", "lastPrompt": "no, that's wrong, use the other approach"})
+
+# 2. Self-correction in assistant text
+lesson_transcript.append({"type": "assistant", "timestamp": "2026-09-07T10:00:01Z",
+                          "sessionId": "test-sess",
+                          "message": {"content": [{"type": "text", "text": "Actually, I was wrong. The correct fix is..."}]}})
+
+# 3. Schema error
+lesson_transcript.append({"type": "tool_result", "timestamp": "2026-09-07T10:00:02Z",
+                          "sessionId": "test-sess",
+                          "tool": "AskUserQuestion", "isError": True,
+                          "error": "Expected array, got str"})
+
+# 4. AskUserQuestion decision
+lesson_transcript.append({"type": "tool_result", "timestamp": "2026-09-07T10:00:03Z",
+                          "sessionId": "test-sess",
+                          "tool": "AskUserQuestion",
+                          "answers": {"choice": "Option A", "question": "Which approach?"}})
+
+# 5. Retry after fail - tool_result with error then different command
+lesson_transcript.append({"type": "tool_result", "timestamp": "2026-09-07T10:00:04Z",
+                          "sessionId": "test-sess", "tool": "Bash", "isError": True,
+                          "input": {"command": "cat file.txt"}})
+lesson_transcript.append({"type": "assistant", "timestamp": "2026-09-07T10:00:05Z",
+                          "sessionId": "test-sess",
+                          "message": {"content": [{"type": "tool_use", "name": "Bash",
+                                                  "input": {"command": "cat /path/to/file.txt"}}]}})
+
+# 6. Negative: identical retry should NOT count
+lesson_transcript.append({"type": "tool_result", "timestamp": "2026-09-07T10:00:06Z",
+                          "sessionId": "test-sess", "tool": "Bash", "isError": True,
+                          "input": {"command": "rm file.txt"}})
+lesson_transcript.append({"type": "assistant", "timestamp": "2026-09-07T10:00:07Z",
+                          "sessionId": "test-sess",
+                          "message": {"content": [{"type": "tool_use", "name": "Bash",
+                                                  "input": {"command": "rm file.txt"}}]}})
+
+# 7. Negative: user prompt with "no" inside code span should NOT count
+lesson_transcript.append({"type": "last-prompt", "timestamp": "2026-09-07T10:00:08Z",
+                          "sessionId": "test-sess",
+                          "lastPrompt": "the code says `no` in the condition"})
+
+r = run_midx(["--dir", "/nonexistent"])  # Just to have MIDX defined, not actually used
+MIDX = os.path.join(HERE, "..", "scripts", "audit-scan.py")
+
+def run_audit(args):
+    cmd = [sys.executable, MIDX] + args
+    return subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+
+with tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False) as fh:
+    for r in lesson_transcript:
+        fh.write(json.dumps(r) + "\n")
+    lesson_path = fh.name
+
+try:
+    r = run_audit([lesson_path, "--lessons"])
+    eq(r.returncode, 0, "--lessons exits 0")
+    check("LESSON CANDIDATES" in r.stdout, "output has LESSON CANDIDATES header")
+    check("correction" in r.stdout.lower(), "shows corrections")
+    check("self-correction" in r.stdout.lower(), "shows self-corrections")
+    check("schema-error" in r.stdout.lower(), "shows schema errors")
+    check("decision" in r.stdout.lower(), "shows decisions")
+    check("retry-after-fail" in r.stdout.lower(), "shows retry-after-fail")
+    # Check summary line format
+    check("lessons:" in r.stdout, "has summary line with 'lessons:'")
+    # Check identical retry NOT counted (6th test - should not appear as retry)
+    # Check code-span "no" NOT counted as correction (7th test)
+    check("the code says `no`" not in r.stdout, "code-span 'no' not flagged as correction")
+finally:
+    os.unlink(lesson_path)
 
 print()
 if _fail:

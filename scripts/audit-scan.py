@@ -1074,6 +1074,192 @@ def quote(paths, pattern, budget):
     return 0
 
 
+# --------------------------------------------------------------------------- lesson mining (deterministic, no LLM)
+
+_LESSON_CORRECTION = re.compile(r"\b(?:no,|that'?s\s+wrong|actually,?|instead,?|why\s+did\s+you|I\s+said|don'?t)\b", re.I)
+_LESSON_SELF_CORRECTION = re.compile(r"\b(?:CORRECTED|turned\s+out|was\s+wrong|disproved|false\s+negative|premise\s+had\s+decayed)\b", re.I)
+_LESSON_SCHEMA_ERROR = re.compile(r"\b(?:Expected\s+\w+,\s+got\s+\w+|schema|validation\s+error|Input\s+shape)\b", re.I)
+
+# User prompt patterns that signal a correction/redirect
+_LESSON_USER_REDIRECT = re.compile(r"^(?:no|wait|actually|stop|that'?s\s+not|why\s+did|I\s+said|don'?t)\b", re.I)
+
+# Decision signals: AskUserQuestion answers
+_LESSON_DECISION_KEYS = ("AskUserQuestion", "user_choice", "answers")
+
+def _is_correction_prompt(text):
+    """Check if a user prompt contains a correction/redirect signal."""
+    text = text.strip()
+    if not text:
+        return False
+    # Check for redirect at the start of the prompt
+    if _LESSON_USER_REDIRECT.search(text):
+        return True
+    # Check for correction keywords anywhere
+    return bool(_LESSON_CORRECTION.search(text))
+
+def _is_self_correction(text):
+    """Check if assistant text contains a self-correction signal."""
+    return bool(_LESSON_SELF_CORRECTION.search(text))
+
+def _is_schema_error(text):
+    """Check if text contains a schema validation error signal."""
+    return bool(_LESSON_SCHEMA_ERROR.search(text))
+
+def _extract_lesson_candidates(scan):
+    """Extract deterministic lesson candidates from a scan.
+
+    Returns a list of dicts with: type, line, excerpt, category
+    """
+    candidates = []
+
+    # Re-read the transcript to get line numbers and raw content
+    with open(scan.path, "r", encoding="utf-8", errors="replace") as fh:
+        lines = list(fh)
+
+    # Track tool results with errors for retry-after-fail detection
+    error_tool_results = {}  # (tool_name, target) -> line_num
+    last_tool_calls = {}     # tool_name -> (command, line_num)
+
+    for line_num, line in enumerate(lines, 1):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            d = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(d, dict):
+            continue
+
+        rec_type = d.get("type")
+
+        # 1. User prompt corrections (type: "last-prompt")
+        if rec_type == "last-prompt" and d.get("lastPrompt"):
+            prompt = d["lastPrompt"]
+            if isinstance(prompt, str) and _is_correction_prompt(prompt):
+                excerpt = prompt[:160].replace("\n", " ⏎ ")
+                candidates.append({
+                    "type": "correction",
+                    "line": line_num,
+                    "excerpt": excerpt,
+                    "category": "user-redirect"
+                })
+
+        # 2. Self-corrections in assistant text
+        if rec_type == "assistant":
+            msg = d.get("message") or {}
+            for blk in msg.get("content") or []:
+                if isinstance(blk, dict) and blk.get("type") == "text":
+                    text = blk.get("text", "")
+                    if _is_self_correction(text):
+                        excerpt = text[:160].replace("\n", " ⏎ ")
+                        candidates.append({
+                            "type": "self-correction",
+                            "line": line_num,
+                            "excerpt": excerpt,
+                            "category": "assistant-correction"
+                        })
+
+        # 3. Tool results with errors (for retry-after-fail)
+        if rec_type == "tool_result" or rec_type == "tool-result":
+            is_error = d.get("isError") or d.get("is_error") or False
+            exit_code = d.get("exit_code") or d.get("exitCode")
+            tool_name = d.get("tool") or d.get("name") or ""
+            # Use a simple target heuristic
+            target = ""
+            if tool_name == "Bash":
+                inp = d.get("input") or {}
+                cmd = inp.get("command", "")
+                if cmd:
+                    target = cmd.split()[0] if cmd.split() else ""
+            elif tool_name in ("Write", "Edit", "MultiEdit"):
+                inp = d.get("input") or {}
+                target = inp.get("file_path", "") or inp.get("path", "")
+
+            if is_error or (exit_code and int(exit_code) != 0):
+                error_tool_results[(tool_name, target)] = line_num
+
+            # Track last tool call for retry detection
+            if tool_name:
+                inp = d.get("input") or {}
+                if tool_name == "Bash":
+                    cmd = inp.get("command", "")
+                    if cmd:
+                        last_tool_calls[tool_name] = (cmd, line_num)
+                else:
+                    last_tool_calls[tool_name] = (str(inp), line_num)
+
+        # 4. Tool calls - check for retry after fail (different command toward same target)
+        if rec_type == "assistant":
+            msg = d.get("message") or {}
+            for blk in msg.get("content") or []:
+                if isinstance(blk, dict) and blk.get("type") == "tool_use":
+                    tool_name = blk.get("name") or ""
+                    inp = blk.get("input") or {}
+                    if tool_name == "Bash":
+                        cmd = inp.get("command", "")
+                        target = cmd.split()[0] if cmd.split() else ""
+                        if (tool_name, target) in error_tool_results:
+                            # Check if this is a DIFFERENT command toward the same target
+                            prev_cmd, prev_line = last_tool_calls.get(tool_name, ("", 0))
+                            if cmd and cmd != prev_cmd:
+                                excerpt = cmd[:160].replace("\n", " ⏎ ")
+                                candidates.append({
+                                    "type": "retry-after-fail",
+                                    "line": line_num,
+                                    "excerpt": excerpt,
+                                    "category": f"retry:{tool_name}"
+                                })
+                    elif tool_name in ("Write", "Edit", "MultiEdit"):
+                        target = inp.get("file_path", "") or inp.get("path", "")
+                        if (tool_name, target) in error_tool_results:
+                            prev_input, prev_line = last_tool_calls.get(tool_name, ("", 0))
+                            if inp != prev_input:
+                                excerpt = f"{tool_name} {target}"[:160]
+                                candidates.append({
+                                    "type": "retry-after-fail",
+                                    "line": line_num,
+                                    "excerpt": excerpt,
+                                    "category": f"retry:{tool_name}"
+                                })
+                    # Update last tool call
+                    if tool_name == "Bash":
+                        cmd = inp.get("command", "")
+                        if cmd:
+                            last_tool_calls[tool_name] = (cmd, line_num)
+                    else:
+                        last_tool_calls[tool_name] = (str(inp), line_num)
+
+        # 5. Decision signals: AskUserQuestion answers
+        if rec_type == "tool_result" or rec_type == "tool-result":
+            tool_name = d.get("tool") or d.get("name") or ""
+            if tool_name == "AskUserQuestion":
+                # The answer is in the result
+                answers = d.get("answers") or {}
+                if answers:
+                    choice = answers.get("choice") or answers.get("question") or "selected"
+                    excerpt = f"AskUserQuestion: {choice}"[:160]
+                    candidates.append({
+                        "type": "decision",
+                        "line": line_num,
+                        "excerpt": excerpt,
+                        "category": "user-decision"
+                    })
+
+        # 6. Schema errors in any record
+        text = _flatten(d) or line
+        if _is_schema_error(text):
+            excerpt = text[:160].replace("\n", " ⏎ ")
+            candidates.append({
+                "type": "schema-error",
+                "line": line_num,
+                "excerpt": excerpt,
+                "category": "validation-error"
+            })
+
+    return candidates
+
+
 def _flatten(d):
     """Everything a human would want to grep, as one string. Kept out of the digest path — this
     runs only for records already known to match, so its cost is bounded by the hit count."""
@@ -1102,6 +1288,54 @@ def _flatten(d):
     return "\n".join(p for p in parts if p)
 
 
+def lessons(paths):
+    """Mine deterministic lesson candidates from transcripts."""
+    all_candidates = []
+    for path in paths:
+        scan = Scan(path).run()
+        candidates = _extract_lesson_candidates(scan)
+        for c in candidates:
+            c["transcript"] = os.path.basename(path)
+        all_candidates.extend(candidates)
+
+    # Count by type
+    counts = collections.Counter(c["type"] for c in all_candidates)
+    c_corr = counts.get("correction", 0)
+    c_retry = counts.get("retry-after-fail", 0)
+    c_dec = counts.get("decision", 0)
+    c_self = counts.get("self-correction", 0)
+    c_schema = counts.get("schema-error", 0)
+    total = len(all_candidates)
+
+    print(f"LESSON CANDIDATES ({total})")
+    if total == 0:
+        print("  (none)")
+        return 0
+
+    # Summary line the main skill reads
+    print(f"lessons: {total} candidates ({c_corr} corrections, {c_retry} retries, {c_dec} decisions, {c_self} self-corrections, {c_schema} schema-errors)")
+
+    # Group by type for display
+    by_type = collections.defaultdict(list)
+    for c in all_candidates:
+        by_type[c["type"]].append(c)
+
+    for typ in ("correction", "retry-after-fail", "decision", "self-correction", "schema-error"):
+        if typ not in by_type:
+            continue
+        print(f"\n  [{typ.upper()}]")
+        for c in by_type[typ][:MAX_PER_SECTION]:
+            print(f"    {c['transcript']}:{c['line']}  {c['excerpt']}")
+        if len(by_type[typ]) > MAX_PER_SECTION:
+            print(f"    … {len(by_type[typ]) - MAX_PER_SECTION} more")
+
+    # Final line for the main skill
+    if total > 0:
+        print(f"\n{total} lesson candidates found ({c_corr} corrections, {c_retry} retries, {c_dec} decisions, {c_self} self-corrections) — run harvest-lessons? (~{total * 1.5:.0f}K budgeted)")
+
+    return 0
+
+
 # --------------------------------------------------------------------------- cli
 
 
@@ -1127,6 +1361,8 @@ def main(argv=None):
                    help="print only records matching REGEX, with line addresses and a budget")
     p.add_argument("--budget", type=int, default=DEFAULT_QUOTE_BUDGET,
                    help=f"max chars --quote may emit (default {DEFAULT_QUOTE_BUDGET})")
+    p.add_argument("--lessons", action="store_true",
+                   help="mine deterministic lesson candidates from transcript (no LLM)")
     args = p.parse_args(argv)
 
     paths = find_transcripts(args)
@@ -1142,6 +1378,9 @@ def main(argv=None):
 
     if args.quote:
         return quote(paths, args.quote, args.budget)
+
+    if args.lessons:
+        return lessons(paths)
 
     scans = [Scan(f).run() for f in paths]
 

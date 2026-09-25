@@ -15,7 +15,8 @@ Options:
   --stale-desc   also flag memories whose BODY says CORRECTED/SUPERSEDED but whose
                  frontmatter description does not - recall matches the description, so a
                  stale one means the WRONG version is what gets retrieved
-  --reviewed FILE  optional file listing reviewed memory filenames (one per line)
+  --reviewed FILE  optional file listing reviewed memory filenames (one per line);
+                   also checks frontmatter `metadata.stale_desc_reviewed: <reason>`
   --json         machine-readable output
   -h, --help     this help
 
@@ -49,6 +50,29 @@ def load_reviewed(path):
                     reviewed.add(line)
     except OSError:
         pass
+    return reviewed
+
+
+def load_frontmatter_reviewed(d, on_disk):
+    """Load reviewed status from frontmatter of memory files themselves.
+
+    A memory can declare `metadata.stale_desc_reviewed: <reason>` in its frontmatter
+    to suppress the stale-desc flag without needing an external file. This keeps
+    the reason next to the memory and needs no hidden side file.
+    """
+    reviewed = set()
+    for f in on_disk:
+        fp = os.path.join(d, f)
+        try:
+            with open(fp, encoding="utf-8", errors="replace") as fh:
+                body = fh.read()
+        except OSError:
+            continue
+        # Check frontmatter for stale_desc_reviewed
+        if re.search(r'^metadata:\s*$', body, re.M):
+            # Look for stale_desc_reviewed under metadata
+            if re.search(r'^  stale_desc_reviewed:\s*.+$', body, re.M):
+                reviewed.add(f)
     return reviewed
 
 def check_stale_description(d, f, reviewed_set):
@@ -130,10 +154,13 @@ def main():
     orphans = sorted(on_disk - all_links)
     broken = sorted(f for f in all_links if not os.path.isfile(os.path.join(d, f)))
 
-    # Load reviewed set
+    # Load reviewed set from file (if provided)
     reviewed_set = set()
     if a.reviewed:
         reviewed_set = load_reviewed(a.reviewed)
+
+    # Also load from frontmatter of memory files
+    reviewed_set |= load_frontmatter_reviewed(d, on_disk)
 
     stale_desc = []
     if a.stale_desc:
