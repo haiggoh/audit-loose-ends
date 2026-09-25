@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.8.1] — 2026-09-25
+
+### Fixed — plugin cache sync for same-version updates
+
+The install path is keyed on the version (`~/.claude/plugins/cache/<owner>/<name>/<version>/`), so a same-version push (v0.8.0 at 11c2ee6 → 639e10d with A1-A3 features) had nowhere new to land and left the installed copy stale. Version bump to 0.8.1 unblocks `claude plugin update` / `get-haiggoh apply`.
+
 ## [0.8.0] — 2026-09-24
 
 ### Fixed — phantom/doubled paths for shell writes after chained `cd`
