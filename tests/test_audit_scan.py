@@ -965,6 +965,31 @@ lesson_transcript.append({"type": "last-prompt", "timestamp": "2026-09-07T10:00:
                           "sessionId": "test-sess",
                           "lastPrompt": "the code says `no` in the condition"})
 
+# 8. 0.8.2 precision: the real schema-error shape (an errored tool_result block inside a user
+# record) must count; everything else that merely MENTIONS "schema" must not. Each negative is a
+# false-positive shape measured on a real session (24/24 schema-errors were noise, 2026-09-30).
+lesson_transcript.append({"type": "user", "timestamp": "2026-09-07T10:00:09Z", "sessionId": "test-sess",
+    "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "is_error": True,
+        "content": "<tool_use_error>InputValidationError: Read failed due to the following issue:\n"
+                   "The parameter `offset` type is expected as `number` but provided as `unknown`</tool_use_error>"}]}})
+lesson_transcript.append({"type": "attachment", "timestamp": "2026-09-07T10:00:10Z", "sessionId": "test-sess",
+    "attachment": {"type": "hook_success", "content": "NEG-HOOK tool-schema discipline reminder"}})
+lesson_transcript.append({"type": "assistant", "timestamp": "2026-09-07T10:00:11Z", "sessionId": "test-sess",
+    "message": {"content": [{"type": "text", "text": "NEG-PROSE the schema-error hits are false positives"}]}})
+lesson_transcript.append({"type": "assistant", "timestamp": "2026-09-07T10:00:12Z", "sessionId": "test-sess",
+    "message": {"content": [{"type": "tool_use", "name": "Edit",
+        "input": {"file_path": "/tmp/x.md", "old_string": "NEG-EDIT schema", "new_string": "y"}}]}})
+lesson_transcript.append({"type": "user", "timestamp": "2026-09-07T10:00:13Z", "sessionId": "test-sess",
+    "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t2", "is_error": True,
+        "content": "Exit code 1\nNEG-EXIT description: the schema of the index"}]}})
+lesson_transcript.append({"type": "user", "timestamp": "2026-09-07T10:00:14Z", "sessionId": "test-sess",
+    "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t3",
+        "content": "NEG-OK a file that discusses schema validation error handling"}]}})
+# 9. The same prompt re-recorded by several later last-prompt lines is ONE correction.
+for i in range(3):
+    lesson_transcript.append({"type": "last-prompt", "timestamp": f"2026-09-07T10:00:2{i}Z",
+                              "sessionId": "test-sess", "lastPrompt": "DUP-PROMPT actually, try a middle road"})
+
 r = run_midx(["--dir", "/nonexistent"])  # Just to have MIDX defined, not actually used
 MIDX = os.path.join(HERE, "..", "scripts", "audit-scan.py")
 
@@ -991,6 +1016,11 @@ try:
     # Check identical retry NOT counted (6th test - should not appear as retry)
     # Check code-span "no" NOT counted as correction (7th test)
     check("the code says `no`" not in r.stdout, "code-span 'no' not flagged as correction")
+    check("InputValidationError" in r.stdout, "real InputValidationError tool_result counts as schema-error")
+    for neg in ("NEG-HOOK", "NEG-PROSE", "NEG-EDIT", "NEG-EXIT", "NEG-OK"):
+        check(neg not in r.stdout, f"{neg}: a mere mention of 'schema' is not a schema-error")
+    eq(r.stdout.count("DUP-PROMPT"), 1, "a prompt re-recorded 3x is listed once")
+    check("2 schema-errors" in r.stdout, "exactly the 2 genuine schema errors are counted")
 finally:
     os.unlink(lesson_path)
 

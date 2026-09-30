@@ -44,14 +44,17 @@ The total cost is capped by `candidates × budget`, not by session length.
 
 ### 4. Skill-improvement lessons → task-observer log (soft dependency)
 
-Probe for task-observer installation:
+Locate the log — never assume a path (it is user-scope in task-observer 3.x, per-project before):
 
 ```sh
-command -v task-observer >/dev/null 2>&1 || [ -d ~/.claude/skills/task-observer ] || [ -d ~/.claude/plugins/cache/*/task-observer ]
+"$CLAUDE_PLUGIN_ROOT/scripts/observation-log.py"   # "per-file\t<dir>", "legacy\t<log.md>", or "none"
 ```
 
-- If present: write to its `log.md` as an OPEN observation.
-- If absent: write to memory (or CLAUDE.md if always-on).
+- `per-file`: create ONE new observation file the way task-observer itself does — its
+  `scripts/new-observation.sh <slug>` where it exists (it derives the id), with `status: open`.
+  Before creating, check the open titles (`--open`) and extend a matching entry instead.
+- `legacy`: append an OPEN `### Observation N:` entry to that `log.md`.
+- `none`: no task-observer log — write to memory (or CLAUDE.md if always-on).
 
 ### 5. Check memory headroom before writing
 
