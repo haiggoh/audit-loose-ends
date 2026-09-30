@@ -1078,7 +1078,10 @@ def quote(paths, pattern, budget):
 
 _LESSON_CORRECTION = re.compile(r"\b(?:no,|that'?s\s+wrong|actually,?|instead,?|why\s+did\s+you|I\s+said|don'?t)\b", re.I)
 _LESSON_SELF_CORRECTION = re.compile(r"\b(?:CORRECTED|turned\s+out|was\s+wrong|disproved|false\s+negative|premise\s+had\s+decayed)\b", re.I)
-_LESSON_SCHEMA_ERROR = re.compile(r"\b(?:Expected\s+\w+,\s+got\s+\w+|schema|validation\s+error|Input\s+shape)\b", re.I)
+# Matched ONLY against the text of an ERRORED tool result (see _errored_tool_results): the bare word
+# "schema" anywhere in a record flagged hook text, prose and edit payloads — 24/24 noise on 2026-09-30.
+_LESSON_SCHEMA_ERROR = re.compile(r"InputValidationError|\bExpected\s+\w+,\s+got\s+\w+|\bvalidation\s+error\b|"
+                                  r"\bis\s+expected\s+as\s+`?\w+`?\s+but\s+provided\b|\bInput\s+shape\b", re.I)
 
 # User prompt patterns that signal a correction/redirect
 _LESSON_USER_REDIRECT = re.compile(r"^(?:no|wait|actually|stop|that'?s\s+not|why\s+did|I\s+said|don'?t)\b", re.I)
@@ -1105,6 +1108,24 @@ def _is_schema_error(text):
     """Check if text contains a schema validation error signal."""
     return bool(_LESSON_SCHEMA_ERROR.search(text))
 
+def _errored_tool_results(d):
+    """Texts of the tool results in this record that the harness marked as errors. Two shapes: the
+    real one (a `tool_result` block with is_error inside a `user` record's message.content) and a
+    flat legacy `tool_result` record with isError/error keys."""
+    out = []
+    if d.get("type") in ("tool_result", "tool-result") and (d.get("isError") or d.get("is_error")):
+        out.append(" ".join(str(d.get(k) or "") for k in ("error", "content", "output")))
+    msg = d.get("message") or {}
+    cont = msg.get("content") if isinstance(msg, dict) else None
+    if isinstance(cont, list):
+        for b in cont:
+            if isinstance(b, dict) and b.get("type") == "tool_result" and b.get("is_error"):
+                c = b.get("content")
+                if isinstance(c, list):
+                    c = " ".join(str(x.get("text") or "") for x in c if isinstance(x, dict))
+                out.append(str(c or ""))
+    return out
+
 def _extract_lesson_candidates(scan):
     """Extract deterministic lesson candidates from a scan.
 
@@ -1119,6 +1140,7 @@ def _extract_lesson_candidates(scan):
     # Track tool results with errors for retry-after-fail detection
     error_tool_results = {}  # (tool_name, target) -> line_num
     last_tool_calls = {}     # tool_name -> (command, line_num)
+    seen_prompts = set()     # the harness re-records the latest prompt on many later lines
 
     for line_num, line in enumerate(lines, 1):
         line = line.strip()
@@ -1136,7 +1158,8 @@ def _extract_lesson_candidates(scan):
         # 1. User prompt corrections (type: "last-prompt")
         if rec_type == "last-prompt" and d.get("lastPrompt"):
             prompt = d["lastPrompt"]
-            if isinstance(prompt, str) and _is_correction_prompt(prompt):
+            if isinstance(prompt, str) and prompt not in seen_prompts and _is_correction_prompt(prompt):
+                seen_prompts.add(prompt)
                 excerpt = prompt[:160].replace("\n", " ⏎ ")
                 candidates.append({
                     "type": "correction",
@@ -1246,9 +1269,10 @@ def _extract_lesson_candidates(scan):
                         "category": "user-decision"
                     })
 
-        # 6. Schema errors in any record
-        text = _flatten(d) or line
-        if _is_schema_error(text):
+        # 6. Schema errors: only an ERRORED tool result whose text is a validation failure.
+        for text in _errored_tool_results(d):
+            if not _is_schema_error(text):
+                continue
             excerpt = text[:160].replace("\n", " ⏎ ")
             candidates.append({
                 "type": "schema-error",

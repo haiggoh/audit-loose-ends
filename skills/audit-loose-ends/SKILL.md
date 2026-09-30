@@ -123,10 +123,20 @@ Scan each surface and fix drift before closing:
    still list things that are done?
 3. **Reminders / crons / scheduled tasks**: still needed, or fired-and-forgotten?
 4. **Task list** (the session task tracker): anything stuck pending/in-progress that's actually done?
-5. **Skill observations** (`~/.claude/projects/<project>/skill-observations/`, if a task-observer
-   skill is writing there): review OPEN entries in `log.md` — action them (create a skill, update a
-   plugin, record in memory) or mark them ACTIONED/DECLINED with the date. Archive entries older than
-   90 days. These are PROPOSALS, never authoritative state: promoting one into a durable rule is
+5. **Skill observations** (only if a task-observer skill keeps a log — **SOFT DEPENDENCY**). Never
+   assume its path: task-observer 3.x keeps a user-scope `~/.claude/skill-observations/` (or wherever
+   `TASK_OBSERVER_WORKSPACE` pins it), older installs a per-project `skill-observations/log.md`. Ask
+   the resolver, which prints `none` when there is no log at all — then skip this step silently:
+
+   ```sh
+   "$CLAUDE_PLUGIN_ROOT/scripts/observation-log.py" --open   # "<layout>\t<path>" + one "open" line each
+   ```
+
+   Review each OPEN entry — action it (create a skill, update a plugin, record in memory) or resolve
+   it. Change status the way the log's own layout does: in the `per-file` layout, edit only that one
+   file's frontmatter (`status`, `resolved`, `resolution`) and let task-observer archive it; in the
+   `legacy` layout, mark it ACTIONED/DECLINED with the date in `log.md`. A `shard` line means two
+   logs observe the same skills — report it rather than picking one. These are PROPOSALS, never authoritative state: promoting one into a durable rule is
    approval-gated, so an entry you cannot action is closed or left open honestly, not silently kept.
 6. **The waypoints store** (`~/.claude/waypoints.json`, if the `waypoints` plugin is present): mark
    finished items done (`waypoints.py done <id> --evidence "commit <sha>, tests N/N"` or `--no-evidence "superseded by <id>"`); **add genuinely-open follow-ups** you'd not want to

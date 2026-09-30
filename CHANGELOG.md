@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.8.2] — 2026-09-30
+
+### Fixed — `--lessons` precision, and a portable task-observer log path
+
+- `audit-scan.py --lessons`: a **schema-error** is now only an ERRORED tool result whose text is a
+  validation failure (`InputValidationError`, `Expected X, got Y`, `is expected as … but provided`).
+  The bare word "schema" anywhere in a record used to match, so hook text, system prompts, prose and
+  Edit payloads were flagged — 24/24 noise on a real session (now 0; a real `InputValidationError`
+  elsewhere is still caught). The real shape — an `is_error` `tool_result` block inside a `user`
+  record — was never examined before.
+- `--lessons` **corrections** are deduplicated by prompt text: the harness re-records the latest
+  prompt on many later lines, so one correction was listed 5×.
+- New `scripts/observation-log.py` resolves where task-observer keeps its log instead of assuming
+  one machine's path: `$TASK_OBSERVER_WORKSPACE`, then the user-scope `~/.claude/skill-observations/`
+  (task-observer 3.x per-file `observation-log/`), then legacy per-project `log.md`; prints `none`
+  when there is no log so the step skips silently, and reports a second legacy log as a shard.
+  `--open` lists open entries for both layouts. The audit's step 5 and harvest-lessons step 4 now
+  use it and write in the layout they find.
+- Tests: 9 new lesson-precision checks (1 real shape counts, 5 mention-only shapes don't, dedupe);
+  new `tests/test_observation_log.sh` (19: no log, legacy, per-file, pinned path with a space,
+  shard report, `--help`, and a guard against re-hardcoding a path in the skills).
+
 ## [0.8.1] — 2026-09-25
 
 ### Fixed — plugin cache sync for same-version updates
