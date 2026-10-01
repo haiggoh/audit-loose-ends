@@ -1,5 +1,32 @@
 # Changelog
 
+## [0.10.0] — 2026-10-02
+
+### Added — waypoint integration (`scripts/waypoint-reconcile.py`)
+
+- **New `scripts/waypoint-reconcile.py`**: deterministic waypoint reconciliation that outputs a fixed-format action list (release, stale, prune). The wrap-up audit now reconciles the waypoints store with the session's work.
+- **Release waiting items**: `promote_landed_waiting()` releases items whose targets have landed (`waypoints.py resolve` equivalent).
+- **Detect stale waiting items**: identifies waiting items whose targets no longer exist (renamed/mistyped).
+- **Prune done items**: `prune()` moves completed items to archive, keeping live store clean.
+- **CLI contract**: `--session`, `--transcript`, `--repo`, `--json`, `--dry-run`, `--apply` flags. Default dry-run; `--apply` executes.
+- **`--from-scan` integration**: `--session <id> --from-scan --repo <dir>` runs `audit-scan.py --repos-only --session <id> --all-projects` to discover touched repos + transcript, then runs all checks.
+
+### Added — `audit-scan.py` repo tracking enhancements
+
+- `--repos-only` flag now outputs one absolute repo path per line (consumed by verify-state.py `--from-scan`).
+- `--json` output includes `"repos": sorted(s.repos)`.
+- Tracks repos from `cd X && git ...` and `git -C X ...` commands in transcript.
+
+### Changed — `verify-state.py` exit code contract
+
+- Exit code 0 = CLEAN (no FAIL), 1 = NOT CLEAN (≥1 FAIL), 2 = usage error. WARN/UNKNOWN never change exit code.
+- The model must now relay the `VERDICT:` line verbatim; may not author its own verdict.
+
+### Added — waypoint integration to audit skill
+
+- Skill Step 0 now runs `verify-state.py --from-scan` and relays its `VERDICT:` line verbatim.
+- Harvest-lessons runs by default on wrap (opt-out via `AUDIT_HARVEST=0` or "no harvest").
+
 ## [0.9.0] — 2026-10-01
 
 ### Added — deterministic verdict gate (`scripts/verify-state.py`)
