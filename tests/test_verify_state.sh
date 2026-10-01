@@ -283,6 +283,100 @@ check "$?" "0" "G7: credential value hidden from output"
 rm -rf "$T"
 echo "== G1-G7 tests added =="
 
+# ---- Task 4: Transcript checks T1 and H1-H4 ----
+
+echo "== Task 4: Transcript checks =="
+
+# Create fixture transcript for T1 and H checks
+T=$(mktemp -d)
+TRANSCRIPT="$T/verify-transcript.jsonl"
+
+# Helper to create transcript records
+rec_bash() {
+    local cmd="$1"
+    local exit_code="${2:-0}"
+    local is_error="${3:-false}"
+    local timestamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+    cat <<EOF
+{"type":"assistant","timestamp":"$timestamp","sessionId":"test-sess","cwd":"/tmp/repo","gitBranch":"main","version":"2.1.220","message":{"stop_reason":"tool_use","content":[{"type":"tool_use","name":"Bash","input":{"command":"$cmd"}}]}}
+EOF
+}
+
+rec_tool_result() {
+    local cmd="$1"
+    local exit_code="${2:-0}"
+    local is_error="${3:-false}"
+    local timestamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+    local output=""
+    if [ $exit_code -ne 0 ]; then
+        output="Exit code $exit_code"
+    fi
+    cat <<EOF
+{"type":"user","timestamp":"$timestamp","sessionId":"test-sess","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tu1","is_error":$is_error,"content":"$output","exit_code":$exit_code}]}}
+EOF
+}
+
+# Build fixture transcript
+# 1. python3 tests/test_a.py -> Exit code 1 (FAIL candidate)
+echo "$(rec_bash "python3 tests/test_a.py")" >> "$TRANSCRIPT"
+echo "$(rec_tool_result "python3 tests/test_a.py" 1 true)" >> "$TRANSCRIPT"
+
+# 2. python3 tests/test_a.py later -> exit 0, ALL PASS (RF4: last run wins -> PASS)
+echo "$(rec_bash "python3 tests/test_a.py")" >> "$TRANSCRIPT"
+echo "$(rec_tool_result "python3 tests/test_a.py" 0 false)" >> "$TRANSCRIPT"
+
+# 3. python3 tests/test_b.py -> backgrounded, then <task-notification>...<status>killed</status> (FAIL)
+echo "$(rec_bash "python3 tests/test_b.py")" >> "$TRANSCRIPT"
+echo "$(rec_tool_result "python3 tests/test_b.py" 137 true)" >> "$TRANSCRIPT"
+
+# 4. bash tests/test_c.sh -> Exit code 1 and never rerun (FAIL)
+echo "$(rec_bash "bash tests/test_c.sh")" >> "$TRANSCRIPT"
+echo "$(rec_tool_result "bash tests/test_c.sh" 1 true)" >> "$TRANSCRIPT"
+
+# 5. git add -A && git commit -m x (H1)
+echo "$(rec_bash "git add -A && git commit -m x")" >> "$TRANSCRIPT"
+echo "$(rec_tool_result "git add -A && git commit -m x" 0 false)" >> "$TRANSCRIPT"
+
+# 6. Write to ~/.claude/plugins/cache/x/y/1.0/z.py (H2)
+echo "$(rec_bash "cat > ~/.claude/plugins/cache/x/y/1.0/z.py <<'EOF'\nbody\nEOF")" >> "$TRANSCRIPT"
+echo "$(rec_tool_result "cat > ~/.claude/plugins/cache/x/y/1.0/z.py <<'EOF'\nbody\nEOF" 0 false)" >> "$TRANSCRIPT"
+
+# 7. git push --force origin main (H3)
+echo "$(rec_bash "git push --force origin main")" >> "$TRANSCRIPT"
+echo "$(rec_tool_result "git push --force origin main" 0 false)" >> "$TRANSCRIPT"
+
+# 8. H4: new untracked files with no git check-ignore hit and no commit
+# (This is harder to test in fixture, skip for now)
+
+# Test T1: verify-state.py --transcript should detect FAIL for test_b (killed) and test_c (exit 1), PASS for test_a (last run ok)
+$SCRIPT --transcript "$TRANSCRIPT" --repo "/tmp" > /tmp/t1.out 2>&1
+grep -q "FAIL T1 tests not shown green: tests/test_b.py (killed)" /tmp/t1.out
+check "$?" "0" "T1: killed test detected"
+grep -q "FAIL T1 tests not shown green: tests/test_c.sh (exit 1)" /tmp/t1.out
+check "$?" "0" "T1: failed test not rerun detected"
+# test_a should NOT appear (last run was PASS)
+! grep -q "tests/test_a.py" /tmp/t1.out
+check "$?" "0" "T1: rerun that passed is not listed as FAIL"
+
+# Test H1: git add -A detected
+grep -q "WARN H1" /tmp/t1.out
+check "$?" "0" "H1: git add -A detected"
+
+# Test H2: write to plugin cache detected
+grep -q "FAIL H2" /tmp/t1.out
+check "$?" "0" "H2: plugin cache write detected"
+
+# Test H3: force-push detected
+grep -q "FAIL H3" /tmp/t1.out
+check "$?" "0" "H3: force-push detected"
+
+# Test nhc detection
+grep -q "nhc:" /tmp/t1.out
+check "$?" "0" "nhc status line present"
+
+rm -rf "$T"
+echo "== Task 4 tests added =="
+
 # ---- Summary ----
 if [ $FAIL -eq 0 ]; then
     echo "ALL PASS"
