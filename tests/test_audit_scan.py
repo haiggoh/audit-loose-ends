@@ -1024,6 +1024,25 @@ try:
 finally:
     os.unlink(lesson_path)
 
+# --------------------------------------------------------------------------- repo tracking (Task 1: --repos-only)
+print("== repo tracking (cd, git -C) ==")
+
+# RF1: git -C counts the target repo
+s = scan_records([
+    rec_bash("cd /tmp/rf-a && git commit -m x"),
+    rec_bash("git -C /tmp/rf-b status"),
+    rec_bash("echo hi"),
+])
+# Repos are tracked in s.repos (not s.files which is for file-history deltas)
+# canon handles /private/tmp on macOS
+check(any("/rf-a" in p for p in s.repos), "cd X && git … counts X as touched")
+check(any("/rf-b" in p for p in s.repos), "RF1: git -C X counts X as touched")
+eq(len([p for p in s.repos if "/rf-" in p]), 2, "a non-git command adds no repo")
+
+# Verify repos are tracked via the new mechanism
+# The scan should record repos from cd and git -C commands
+print("== repo tracking tests added ==")
+
 print()
 if _fail:
     print(f"FAILURES: {_fail}")
