@@ -289,6 +289,52 @@ While reconciling, sweep memories/notes for pending markers (`⏳`, `REMAINING`,
 yet tracked as waypoints and add them. Keep this in the deliberate audit pass, not the startup
 banner, so the banner stays precise and false-positive-free.
 
+### Waypoint integration (deterministic, failsafe)
+
+At the end of the audit, automatically reconcile the waypoints store with the session's work:
+
+```sh
+# 1. Probe for waypoints CLI (soft dependency — silent if absent)
+if command -v waypoints.py >/dev/null 2>&1; then
+    WAYPOINTS_AVAILABLE=1
+else
+    WAYPOINTS_AVAILABLE=0
+fi
+
+if [ -n "$WAYPOINTS_AVAILABLE" ]; then
+    # 1a. Find waypoints touched this session (from audit-scan.py output)
+    # The audit-scan.py --repos output already lists repos touched; check waypoints.json for items
+    # modified in those repos or with titles matching the session's work
+    
+    # 1b. Update touched waypoints with progress/evidence
+    # If a waypoint's title/description matches work done this session, mark it done with evidence
+    # waypoints.py done <id> --evidence "commit <sha>, tests N/N"
+    
+    # 1c. Add new waypoints for untracked completed work
+    # For each significant completed task not already tracked, add a waypoint
+    # waypoints.py add "Specific actionable title" --detail "..." --point "evidence: ..."
+    
+    # 1d. Release waiting items whose targets have landed
+    waypoints.py resolve
+    
+    # 1e. Prune completed items
+    waypoints.py prune
+fi
+```
+
+**Deterministic script approach**: The heavy lifting is done by a companion script
+`$CLAUDE_PLUGIN_ROOT/scripts/waypoint-reconcile.py` (to be created) that:
+- Reads the audit-scan.py digest for the session
+- Cross-references with waypoints.json
+- Outputs a deterministic list of actions (done, add, release, prune)
+- The model only relays the script's output verbatim — never authors the verdict
+
+**Failsafe design**:
+- Optional dependency: `command -v waypoints.py` probe, silent skip if absent
+- Deterministic script does the heavy lifting; model only relays output
+- If waypoints not installed, step is silently skipped (no error, no nag)
+- Script exits 0 even if waypoints not installed; model just reports "waypoints not available"
+
 ## Finishing an item
 
 Marking something done means marking it done **in whichever surface holds it** — flip the memory's
