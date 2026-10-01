@@ -15,7 +15,7 @@ import sys
 from collections import namedtuple
 from pathlib import Path
 
-Finding = namedtuple("Finding", "level check_id message")
+Finding = namedtuple("Finding", "level check_id message repo")
 
 
 def _git(repo, *args, timeout=20):
@@ -57,7 +57,7 @@ def render(results, nhc_status=""):
     """Render findings in fixed format per D7."""
     lines = ["VERIFY-STATE  (read-only)"]
 
-    # Group by repo
+    # Group by repo (use Finding.repo field)
     by_repo = collections.defaultdict(list)
     transcript_findings = []
 
@@ -65,12 +65,8 @@ def render(results, nhc_status=""):
         if f.check_id.startswith("T1") or f.check_id.startswith("H"):
             transcript_findings.append(f)
         else:
-            # Extract repo from message (format: "repo <path> ...")
-            match = re.search(r'repo\s+(\S+)', f.message)
-            if match:
-                by_repo[match.group(1)].append(f)
-            else:
-                by_repo["unknown"].append(f)
+            repo = f.repo if hasattr(f, 'repo') and f.repo else "unknown"
+            by_repo[repo].append(f)
 
     for repo, findings in sorted(by_repo.items()):
         lines.append(f"  repo {repo}")
@@ -100,9 +96,284 @@ def render(results, nhc_status=""):
 
 
 def check_repo(repo, allow_markers=None):
-    """Run all repo checks. Returns list of Finding."""
+    """Run all repo checks G1-G7. Returns list of Finding."""
+    # Convert allow_markers to relative paths (from repo root) for comparison with git grep output
+    # Use realpath to handle macOS /private symlinks
+    repo_real = os.path.realpath(repo)
+    allow_markers_rel = set()
+    for m in (allow_markers or []):
+        if os.path.isabs(m):
+            try:
+                m_real = os.path.realpath(m)
+                allow_markers_rel.add(os.path.relpath(m_real, repo_real))
+            except ValueError:
+                # On Windows, relpath can fail across drives; keep absolute as fallback
+                allow_markers_rel.add(m)
+        else:
+            allow_markers_rel.add(m)
     findings = []
-    # Placeholder - will implement G1-G7 in Task 3
+
+    # G1: conflict markers in tracked files at HEAD and working tree
+    findings.extend(_g1_conflict_markers(repo, allow_markers_rel, repo))
+
+    # G2: dirty working tree
+    findings.extend(_g2_dirty_working_tree(repo, repo))
+
+    # G3: branch ahead/diverged/no upstream
+    findings.extend(_g3_branch_status(repo, repo))
+
+    # G4: in-progress rebase/merge/cherry-pick
+    findings.extend(_g4_rebase_merge_in_progress(repo, repo))
+
+    # G5: version agreement
+    findings.extend(_g5_version_agreement(repo, repo))
+
+    # G6: newest tag has GitHub release
+    findings.extend(_g6_github_release(repo, repo))
+
+    # G7: remote URL embeds credentials
+    findings.extend(_g7_remote_credentials(repo, repo))
+
+    return findings
+
+
+def _g1_conflict_markers(repo, allow_markers, repo_path):
+    """G1: conflict markers in tracked files at HEAD and working tree."""
+    findings = []
+
+    # Check HEAD
+    rc, out = _git(repo, "grep", "-nE", r'^(<<<<<<<|>>>>>>>) ', "HEAD", "--")
+    if rc == 0:
+        files = set()
+        for line in out.splitlines():
+            # Format: HEAD:path:lineno:content or path:lineno:content
+            parts = line.split(":", 2)
+            if len(parts) >= 3 and parts[0] == "HEAD":
+                file_path = parts[1]
+            elif len(parts) >= 2:
+                file_path = parts[0]
+            else:
+                continue
+            files.add(file_path)
+
+        for f in sorted(files):
+            if f in allow_markers:
+                findings.append(Finding("WARN", "G1", f"markers allowed by flag: {f}", repo_path))
+            else:
+                findings.append(Finding("FAIL", "G1", f"conflict markers: {f}", repo_path))
+
+    # Check working tree
+    rc, out = _git(repo, "grep", "-nE", r'^(<<<<<<<|>>>>>>>) ', "--untracked")
+    if rc == 0:
+        for line in out.splitlines():
+            parts = line.split(":", 2)
+            if len(parts) >= 3 and parts[0] == "HEAD":
+                file_path = parts[1]
+            elif len(parts) >= 2:
+                file_path = parts[0]
+            else:
+                continue
+            if file_path not in allow_markers:
+                findings.append(Finding("FAIL", "G1", f"conflict markers: {file_path}", repo_path))
+
+    return findings
+
+
+def _g2_dirty_working_tree(repo, repo_path):
+    """G2: dirty working tree (porcelain count, list ≤10 paths)."""
+    findings = []
+    rc, out = _git(repo, "status", "--porcelain")
+    if rc != 0:
+        return findings
+
+    lines = [line for line in out.splitlines() if line.strip()]
+    if not lines:
+        findings.append(Finding("PASS", "G2", "working tree clean", repo_path))
+        return findings
+
+    untracked = sum(1 for line in lines if line.startswith("??"))
+    modified = sum(1 for line in lines if not line.startswith("??"))
+
+    paths = [line[3:] for line in lines[:10]]
+    findings.append(Finding("FAIL", "G2",
+        f"dirty: {untracked} untracked, {modified} modified ({', '.join(paths)})", repo_path))
+    return findings
+
+
+def _g3_branch_status(repo, repo_path):
+    """G3: branch ahead of / diverged from upstream, or no upstream."""
+    findings = []
+
+    # Get upstream branch
+    rc, upstream = _git(repo, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}")
+    if rc != 0:
+        # No upstream
+        rc, head = _git(repo, "rev-parse", "--abbrev-ref", "HEAD")
+        if rc == 0 and head == "HEAD":
+            findings.append(Finding("WARN", "G3", "detached HEAD", repo_path))
+        else:
+            findings.append(Finding("WARN", "G3", "no upstream", repo_path))
+        return findings
+
+    # Check ahead/behind
+    rc, counts = _git(repo, "rev-list", "--left-right", "--count", "@{u}...HEAD")
+    if rc == 0 and counts:
+        parts = counts.split("\t")
+        if len(parts) == 2:
+            ahead = int(parts[1]) if parts[1] else 0
+            behind = int(parts[0]) if parts[0] else 0
+
+            if ahead > 0 and behind > 0:
+                findings.append(Finding("FAIL", "G3", f"diverged: {ahead} ahead, {behind} behind (as of last fetch)", repo_path))
+            elif ahead > 0:
+                findings.append(Finding("FAIL", "G3", f"ahead of {upstream} by {ahead} (not pushed)", repo_path))
+            elif behind > 0:
+                findings.append(Finding("WARN", "G3", f"behind {upstream} by {behind}", repo_path))
+            else:
+                findings.append(Finding("PASS", "G3", "branch up to date with upstream", repo_path))
+
+    return findings
+
+
+def _g4_rebase_merge_in_progress(repo, repo_path):
+    """G4: in-progress rebase/merge/cherry-pick."""
+    findings = []
+
+    # Check for various in-progress states
+    checks = [
+        (".git/rebase-merge", "rebase in progress"),
+        (".git/rebase-apply", "rebase/am in progress"),
+        (".git/MERGE_HEAD", "merge in progress"),
+        (".git/CHERRY_PICK_HEAD", "cherry-pick in progress"),
+        (".git/REVERT_HEAD", "revert in progress"),
+        (".git/BISECT_LOG", "bisect in progress"),
+    ]
+
+    for path, msg in checks:
+        full_path = os.path.join(repo, path)
+        if os.path.exists(full_path):
+            findings.append(Finding("FAIL", "G4", msg, repo_path))
+            break  # Report first one found
+
+    return findings
+
+
+def _g5_version_agreement(repo, repo_path):
+    """G5: version agreement: plugin.json, VERSION, CHANGELOG top heading."""
+    findings = []
+    versions = {}
+
+    # plugin.json
+    plugin_path = os.path.join(repo, ".claude-plugin", "plugin.json")
+    if os.path.exists(plugin_path):
+        try:
+            with open(plugin_path) as f:
+                data = json.load(f)
+                v = data.get("version", "").strip()
+                if v:
+                    versions["plugin.json"] = v
+        except Exception:
+            pass
+
+    # VERSION file
+    version_path = os.path.join(repo, "VERSION")
+    if os.path.exists(version_path):
+        try:
+            with open(version_path) as f:
+                v = f.read().strip()
+                if v:
+                    versions["VERSION"] = v
+        except Exception:
+            pass
+
+    # CHANGELOG top heading
+    changelog_path = os.path.join(repo, "CHANGELOG.md")
+    if os.path.exists(changelog_path):
+        try:
+            with open(changelog_path) as f:
+                for line in f:
+                    m = re.match(r'^##\s*\[?v?(\d+\.\d+\.\d+)', line)
+                    if m:
+                        versions["CHANGELOG"] = m.group(1)
+                        break
+        except Exception:
+            pass
+
+    if len(versions) <= 1:
+        return findings  # Nothing to compare
+
+    # Check all pairs
+    items = list(versions.items())
+    for i, (name1, v1) in enumerate(items):
+        for name2, v2 in items[i+1:]:
+            if v1 != v2:
+                findings.append(Finding("FAIL", "G5",
+                    f"version mismatch: {name1} {v1}, {name2} {v2}", repo_path))
+
+    return findings
+
+
+def _g6_github_release(repo, repo_path):
+    """G6: newest local v* tag at HEAD-ancestry has pushed tag and GitHub release."""
+    findings = []
+
+    # Get newest tag at HEAD ancestry
+    rc, tag = _git(repo, "describe", "--tags", "--abbrev=0")
+    if rc != 0 or not tag:
+        return findings  # No tags
+
+    # Check if tag exists on remote
+    rc, _ = _git(repo, "ls-remote", "--tags", "origin", tag)
+    if rc != 0:
+        findings.append(Finding("UNKNOWN", "G6", "gh unavailable — release not checked (no remote tag)", repo_path))
+        return findings
+
+    # Check GitHub release
+    rc, url = _git(repo, "config", "--get", "remote.origin.url")
+    if rc != 0 or not url:
+        findings.append(Finding("UNKNOWN", "G6", "gh unavailable — no remote URL", repo_path))
+        return findings
+
+    # Parse owner/repo from URL
+    m = re.search(r'[:/]([^/]+)/([^/.]+)(?:\.git)?$', url)
+    if not m:
+        findings.append(Finding("UNKNOWN", "G6", "gh unavailable — cannot parse remote URL", repo_path))
+        return findings
+
+    owner, name = m.group(1), m.group(2)
+    if name.endswith(".git"):
+        name = name[:-4]
+
+    # Try gh release view
+    try:
+        result = subprocess.run(
+            ["gh", "release", "view", tag, "--repo", f"{owner}/{name}"],
+            capture_output=True, text=True, timeout=20
+        )
+        if result.returncode != 0:
+            findings.append(Finding("WARN", "G6", f"tag {tag} has no GitHub release", repo_path))
+        else:
+            findings.append(Finding("PASS", "G6", f"tag {tag} has GitHub release", repo_path))
+    except FileNotFoundError:
+        findings.append(Finding("UNKNOWN", "G6", "gh unavailable — release not checked", repo_path))
+    except subprocess.TimeoutExpired:
+        findings.append(Finding("UNKNOWN", "G6", "gh timeout — release not checked", repo_path))
+    except Exception:
+        findings.append(Finding("UNKNOWN", "G6", "gh unavailable — release not checked", repo_path))
+
+    return findings
+
+
+def _g7_remote_credentials(repo, repo_path):
+    """G7: remote URL embeds credentials."""
+    findings = []
+    rc, url = _git(repo, "config", "--get", "remote.origin.url")
+    if rc != 0 or not url:
+        return findings
+
+    # Check for credentials in URL: https://user:token@host
+    if re.match(r'^https?://[^/@\s]+:[^/@\s]+@', url):
+        findings.append(Finding("FAIL", "G7", "remote URL embeds credentials (value hidden)", repo_path))
     return findings
 
 

@@ -118,6 +118,171 @@ fi
 rm -rf "$T" "$STAMP" "$STAMP2" "$STAMP3"
 echo "== read-only discriminant tests done =="
 
+# ---- Step 3: G1-G7 repo checks (failing tests) ----
+
+echo "== G1-G7 repo checks =="
+
+# Helper to create a throwaway repo with remote
+# Returns: repo_path remote_path temp_dir (only these three lines on stdout)
+make_repo_with_remote() {
+    local T=$(mktemp -d)
+    local R="$T/repo"
+    local REMOTE="$T/remote.git"
+    mkdir -p "$R" "$REMOTE"
+    cd "$R" || exit 1
+    git init -q
+    git config user.email "test@test"
+    git config user.name "Test"
+    git remote add origin "$REMOTE"
+    git init --bare -q "$REMOTE"
+    # Create initial commit and push to establish upstream
+    echo "init" > "$R/init.txt"
+    git add init.txt
+    git commit -q -m "init"
+    git push -u -q origin master 2>/dev/null
+    # Return ONLY repo path, remote path, and temp dir (separated by newlines)
+    echo "$R"
+    echo "$REMOTE"
+    echo "$T"
+} 2>/dev/null
+
+# G1: conflict markers
+echo "Testing G1 (conflict markers)..."
+read -r R REMOTE T < <(make_repo_with_remote)
+echo "<<<<<<< HEAD" > "$R/f.md"
+echo "ours" >> "$R/f.md"
+echo "=======" >> "$R/f.md"
+echo "theirs" >> "$R/f.md"
+echo ">>>>>>> abc" >> "$R/f.md"
+git -C "$R" add f.md
+git -C "$R" commit -q -m "add conflict"
+$SCRIPT --repo "$R" > /tmp/g1.out 2>&1
+grep -q "FAIL G1 conflict markers: f.md" /tmp/g1.out
+check "$?" "0" "G1: conflict markers detected"
+
+# G1/RF3: allow-markers flag
+$SCRIPT --repo "$R" --allow-markers "$R/f.md" > /tmp/g1_allow.out 2>&1
+grep -q "WARN G1 markers allowed by flag: f.md" /tmp/g1_allow.out
+check "$?" "0" "G1/RF3: --allow-markers shows WARN not silent PASS"
+
+# G2: dirty working tree
+echo "Testing G2 (dirty working tree)..."
+read -r R REMOTE T < <(make_repo_with_remote)
+echo "x" > "$R/new.txt"
+$SCRIPT --repo "$R" > /tmp/g2.out 2>&1
+grep -q "FAIL G2 dirty" /tmp/g2.out
+check "$?" "0" "G2: dirty working tree detected"
+rm -rf "$(dirname "$R")"
+
+# G3: ahead of upstream (local commit NOT pushed)
+echo "Testing G3 (ahead/diverged/no upstream)..."
+read -r R REMOTE T < <(make_repo_with_remote)
+echo "y" > "$R/y.txt"
+git -C "$R" add y.txt
+git -C "$R" commit -q -m "local commit"
+# Do NOT push - local is now ahead of origin/master
+$SCRIPT --repo "$R" > /tmp/g3a.out 2>&1
+grep -q "FAIL G3 ahead of origin" /tmp/g3a.out
+check "$?" "0" "G3: ahead of upstream detected"
+
+# G3: diverged (both local and remote have different commits)
+{ read -r R; read -r REMOTE; read -r TEMP_DIR; } < <(make_repo_with_remote)
+echo "z" > "$R/z.txt"
+git -C "$R" add z.txt
+git -C "$R" commit -q -m "local"
+git -C "$R" push -q origin master
+
+# Create a second clone to make a remote commit
+R2="$TEMP_DIR/repo2"
+git clone -q "$REMOTE" "$R2"
+cd "$R2" || exit 1
+echo "remote" > "$R2/remote.txt"
+git add remote.txt
+git commit -q -m "remote commit"
+git push -q origin master
+
+cd "$R" || exit 1
+git fetch -q origin
+# Now local and remote have different commits - they diverge
+echo "w" > "$R/w.txt"
+git -C "$R" add w.txt
+git -C "$R" commit -q -m "local diverged"
+$SCRIPT --repo "$R" > /tmp/g3b.out 2>&1
+grep -q "FAIL G3 diverged" /tmp/g3b.out
+check "$?" "0" "G3: diverged detected"
+
+# G3: detached HEAD
+read -r R REMOTE T < <(make_repo_with_remote)
+git -C "$R" checkout --detach -q
+$SCRIPT --repo "$R" > /tmp/g3c.out 2>&1
+grep -q "WARN G3 detached HEAD" /tmp/g3c.out
+check "$?" "0" "G3: detached HEAD detected"
+
+# G3: no upstream
+read -r R REMOTE T < <(make_repo_with_remote)
+git -C "$R" branch --unset-upstream
+$SCRIPT --repo "$R" > /tmp/g3d.out 2>&1
+grep -q "WARN G3 no upstream" /tmp/g3d.out
+check "$?" "0" "G3: no upstream detected"
+
+# G4: rebase in progress
+echo "Testing G4 (rebase/merge/cherry-pick in progress)..."
+read -r R REMOTE T < <(make_repo_with_remote)
+mkdir -p "$R/.git/rebase-merge"
+$SCRIPT --repo "$R" > /tmp/g4.out 2>&1
+grep -q "FAIL G4 rebase in progress" /tmp/g4.out
+check "$?" "0" "G4: rebase in progress detected"
+
+# G5: version mismatch
+echo "Testing G5 (version agreement)..."
+read -r R REMOTE T < <(make_repo_with_remote)
+mkdir -p "$R/.claude-plugin"
+echo '{"version": "0.2.0"}' > "$R/.claude-plugin/plugin.json"
+echo "## [0.1.0]" > "$R/CHANGELOG.md"
+$SCRIPT --repo "$R" > /tmp/g5.out 2>&1
+grep -q "FAIL G5 version mismatch: plugin.json 0.2.0, CHANGELOG 0.1.0" /tmp/g5.out
+check "$?" "0" "G5: version mismatch detected"
+
+# G6: gh unavailable
+echo "Testing G6 (gh unavailable)..."
+read -r R REMOTE T < <(make_repo_with_remote)
+git -C "$R" tag v0.2.0
+# Run with PATH without gh
+PATH="/usr/bin:/bin" $SCRIPT --repo "$R" > /tmp/g6a.out 2>&1
+grep -q "UNKNOWN G6 gh unavailable" /tmp/g6a.out
+check "$?" "0" "G6: gh unavailable → UNKNOWN"
+
+# G6: stub gh that exits 1
+{ read -r R; read -r REMOTE; read -r TEMP_DIR; } < <(make_repo_with_remote)
+git -C "$R" tag v0.2.0
+mkdir -p "$TEMP_DIR/bin"
+cat > "$TEMP_DIR/bin/gh" <<'EOF'
+#!/bin/bash
+if [[ "$1" = "release" && "$2" = "view" ]]; then
+    exit 1
+fi
+# For other commands, just exit 0 (we only test the release view case)
+exit 0
+EOF
+chmod +x "$TEMP_DIR/bin/gh"
+PATH="$TEMP_DIR/bin:/usr/bin:/bin" $SCRIPT --repo "$R" > /tmp/g6b.out 2>&1
+grep -q "WARN G6 tag v0.2.0 has no GitHub release" /tmp/g6b.out
+check "$?" "0" "G6: stub gh exits 1 → WARN"
+
+# G7: remote URL with credentials
+echo "Testing G7 (remote URL embeds credentials)..."
+read -r R REMOTE T < <(make_repo_with_remote)
+git -C "$R" remote set-url origin "https://user:SYNTH_TOKEN_123@example.invalid/r.git"
+$SCRIPT --repo "$R" > /tmp/g7.out 2>&1
+grep -q "FAIL G7 remote URL embeds credentials" /tmp/g7.out
+check "$?" "0" "G7: credentials in remote URL detected"
+# Assert token NOT printed
+! grep -q "SYNTH_TOKEN_123" /tmp/g7.out
+check "$?" "0" "G7: credential value hidden from output"
+
+rm -rf "$T"
+echo "== G1-G7 tests added =="
+
 # ---- Summary ----
 if [ $FAIL -eq 0 ]; then
     echo "ALL PASS"
