@@ -1,5 +1,31 @@
 # Changelog
 
+## [0.9.0] — 2026-10-01
+
+### Added — deterministic verdict gate (`scripts/verify-state.py`)
+
+- **New `scripts/verify-state.py`**: deterministic repo state verification that prints a fixed-format `VERDICT:` block with exit code 0/1/2. The wrap-up audit no longer relies on model judgement — it must relay the script's `VERDICT:` line verbatim.
+- **Repo checks G1–G7**: conflict markers (G1), dirty working tree (G2), branch status ahead/diverged/no upstream (G3), in-progress rebase/merge/cherry-pick (G4), version agreement plugin.json/VERSION/CHANGELOG (G5), GitHub release for newest tag (G6, UNKNOWN if gh unavailable), remote URL credentials (G7, value hidden).
+- **Transcript checks T1 & H1–H4**: T1 checks if test commands' LAST run exited ≠0/was killed/timed out (last run wins). H1: `git add -A`/commit -a (WARN). H2: wrote to `~/.claude/plugins/cache/` (FAIL). H3: force-push/moved pushed tag (FAIL). H4: new untracked files with no `git check-ignore` hit (WARN, covered by G2).
+- **no-hidden-changes detection**: reads `installed_plugins.json` + `settings.json` for `no-hidden-changes@` key + `enabledPlugins`; env `AUDIT_NHC=0|1` forces off/on.
+- **Harvest by default**: skill Step 0 runs `audit-scan.py --lessons` always; if N>0 runs harvest-lessons (budget 3000 tokens); opt-out via "no harvest" or `AUDIT_HARVEST=0`.
+- **Exit code contract**: 0 = no FAIL, 1 = ≥1 FAIL, 2 = usage error; WARN/UNKNOWN don't affect exit code.
+- **`--from-scan` integration**: `--session <id> --from-scan --repo <dir>` runs `audit-scan.py --repos-only --session <id> --all-projects` to discover touched repos + transcript, then runs all checks.
+- **`audit-scan.py --repos-only`**: new flag prints one absolute repo path per line (consumed by verify-state.py); `--json` adds `"repos": [...]`.
+- **`audit-scan.py` repo tracking**: tracks repos from `cd X && git ...` and `git -C X ...` commands in transcript.
+
+### Added — `scripts/verify-state.py` with full test coverage
+
+- **Framework-free test suite** (`tests/test_verify_state.sh`): CLI contract (--help, --bogus, empty audit), read-only discriminant (planted write detection), all G1–G7 repo checks with planted positives (FAIL→PASS), Task 4 transcript checks (T1 killed/failed/rerun, H1–H4 no-hidden-changes traps).
+- **Acceptance test**: `verify-state.py --session 13043911 --from-scan --repo /tmp` on the real incident transcript prints `VERDICT: NOT CLEAN`, exit 1 — reproducing the 2026-10-01 incident where model claimed "no loose ends" over conflict markers, unpushed rebase, killed suites.
+
+### Added — `audit-scan.py` repo tracking + `--repos-only` flag
+
+- New `Scan.repos: set[str]` tracks git work-tree roots from `cd X`, `git -C X`, or record `cwd` when git command ran there.
+- `--repos-only` prints one absolute path per line (consumed by verify-state.py `--from-scan`).
+- `--json` adds `"repos": sorted(s.repos)`.
+- Tests: RF1 `git -C X` counts X as touched; non-git command adds no repo.
+
 ## [0.8.2] — 2026-09-30
 
 ### Fixed — `--lessons` precision, and a portable task-observer log path

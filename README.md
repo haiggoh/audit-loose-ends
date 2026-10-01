@@ -11,6 +11,8 @@ in a memory; a note describes a plan that already shipped; a follow-up never get
 alone, a future session (or a startup banner) re-surfaces settled ground as if it were open. `audit-loose-ends`
 is the recurring end-of-task pass that keeps records honest.
 
+**What changed in 0.9.0**: The wrap-up audit now produces its "clean / not clean" verdict from a deterministic script (`verify-state.py`) instead of model judgement. The script inspects live repo state (git, tests, no-hidden-changes traps) and prints a fixed-format `VERDICT:` block. The model may only *relay* the verdict verbatim — it cannot override it. Harvest-lessons now runs by default (opt-out with `AUDIT_HARVEST=0` or "no harvest").
+
 ## What it does
 
 At session start it injects a **model-only** one-line reminder (no user-facing banner). The reminder
@@ -33,6 +35,55 @@ flag, never the milestone written next to it. So the audit pass also reads `list
 judges each milestone by hand, releasing with `triage <id> --clear` when the milestone has landed
 even though its target has not. A waypoint parked on a condition that was met is presented as
 nothing-to-do while being ready to start, which is worse than a stale done-flag.
+
+### The deterministic verdict gate (`scripts/verify-state.py`)
+
+**New in 0.9.0.** The wrap-up audit no longer relies on model judgement to decide "clean / not clean." Instead, `scripts/verify-state.py` inspects live state and prints a fixed-format `VERDICT:` block with exit code 0 (clean) or 1 (not clean).
+
+```sh
+scripts/verify-state.py --repo /path/to/repo                    # check a specific repo
+scripts/verify-state.py --session 13043911 --from-scan --repo /tmp  # from audit-scan repos + transcript
+scripts/verify-state.py --transcript /path/to/session.jsonl --repo /tmp  # explicit transcript
+```
+
+**What it checks (each = one FAIL/WARN/PASS/UNKNOWN line):**
+
+| id | Check | Level |
+|---|---|---|
+| G1 | conflict markers in tracked files at HEAD and working tree | FAIL |
+| G2 | dirty working tree (porcelain count, lists ≤10 paths) | FAIL |
+| G3 | branch ahead of / diverged from upstream, or no upstream | FAIL (ahead/diverged) · WARN (no upstream/detached) |
+| G4 | in-progress rebase/merge/cherry-pick/revert/bisect | FAIL |
+| G5 | version agreement: plugin.json, VERSION, CHANGELOG top heading | FAIL on mismatch |
+| G6 | newest local v* tag at HEAD-ancestry has pushed tag + GitHub release | WARN (missing release) · UNKNOWN (gh unavailable) |
+| G7 | remote URL embeds credentials (`https://user:token@`) | FAIL, value never printed |
+| T1 | transcript: a test command whose LAST run exited ≠0, was killed, or timed out | FAIL — "tests not shown green" |
+| H1 | (no-hidden-changes) transcript ran `git add -A`/`--all`/`commit -a` | WARN |
+| H2 | (no-hidden-changes) transcript wrote under `~/.claude/plugins/cache/` | FAIL |
+| H3 | (no-hidden-changes) transcript force-pushed or moved a pushed tag | FAIL |
+| H4 | (no-hidden-changes) new untracked files with no `git check-ignore` hit and no commit | WARN |
+
+H-checks run only when `no-hidden-changes` is detected (reads `installed_plugins.json` + `settings.json`). Env override `AUDIT_NHC=0|1` forces off/on.
+
+**Output format (fixed; tests assert it):**
+```
+VERIFY-STATE  (read-only)
+  repo ~/ClaudeWorkspace/x  [feature/y]
+    FAIL G1 conflict markers: CHANGELOG.md:5, CHANGELOG.md:62
+    PASS G2 working tree clean
+    ...
+  transcript
+    FAIL T1 tests not shown green: tests/test_session_picker_pty.py (last run killed)
+  nhc: detected 1.7.0 (enabled)
+    WARN H1 `git add -A` ran in ~/ClaudeWorkspace/local-agents
+VERDICT: NOT CLEAN — 3 FAIL, 1 WARN, 0 UNKNOWN
+```
+
+**Exit code contract:** 0 = no FAIL; 1 = ≥1 FAIL; 2 = usage error. WARN/UNKNOWN never change exit code.
+
+**From transcript (`--from-scan`):** pass `--session <id>` and `--from-scan`; it runs `audit-scan.py --repos-only --session <id> --all-projects` to discover touched repos and the transcript, then runs the same checks.
+
+**Harvest by default:** Main skill Step 0 runs `audit-scan.py --lessons` always; if N>0 it proceeds into harvest-lessons (budget 3000 tokens ≈ 2 candidates; >15 → asks which categories). Opt-out: "no harvest" or `AUDIT_HARVEST=0`.
 
 ### The transcript scan (`scripts/audit-scan.py`)
 

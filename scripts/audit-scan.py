@@ -314,6 +314,23 @@ def _repo_of(cmd):
     return os.path.basename(m.group(1).rstrip("/;&|\"'")) if m else ""
 
 
+def _repo_dir(cmd):
+    """Extract the repo directory from a git command.
+
+    Returns the -C arg if present, else the cd target if the command starts with cd.
+    Returns the canonical path (expanded, resolved).
+    """
+    # First check for git -C <dir>
+    git_c_match = re.search(r'\bgit\s+-C\s+(\S+)', cmd)
+    if git_c_match:
+        return os.path.expanduser(git_c_match.group(1).rstrip("/;&|\"'"))
+    # Otherwise check for cd <dir> at the start of a command
+    cd_match = _CD_RE.search(cmd)
+    if cd_match:
+        return os.path.expanduser(cd_match.group(1).rstrip("/;&|\"'"))
+    return None
+
+
 def _subject_of(cmd):
     m = _SUBJ_MARK_RE.search(cmd)
     if m:
@@ -549,6 +566,8 @@ class Scan:
         self.last_ts = None
         self.turns = collections.Counter()
         self.files = collections.Counter()       # abs path -> version count
+        # Repos touched via cd or git -C in the transcript
+        self.repos = set()
         # Paths that only a SHELL command names as a write target. Lower confidence than
         # self.files by construction — see _SHELL_WRITE_RES. Kept separate so the two are
         # never conflated in the report.
@@ -673,11 +692,17 @@ class Scan:
     def _bash(self, cmd):
         if not cmd:
             return
-        if GIT_READONLY.search(shell_only(cmd)) and not any(
-                p.search(shell_only(cmd)) for k, p in CMD_PATTERNS if k.startswith("git-")):
+        probe = shell_only(cmd)
+        # Track repos touched via git commands (cd <dir> && git ... or git -C <dir> ...)
+        # Do this BEFORE the read-only check so even read-only git commands count as touching the repo
+        if re.search(r'\bgit\b', cmd):
+            repo_dir = _repo_dir(cmd)
+            if repo_dir:
+                self.repos.add(canon(repo_dir))
+        if GIT_READONLY.search(probe) and not any(
+                p.search(probe) for k, p in CMD_PATTERNS if k.startswith("git-")):
             self.readonly_git += 1
             return
-        probe = shell_only(cmd)
         self._mine_shell_writes(probe, cmd)
         self._mine_shell_removes(probe, cmd)
         subj = _subject_of(cmd)
@@ -859,6 +884,8 @@ def report(scans, args):
             out.append(f"  branch      {'; '.join(b for b, _n in s.branches.most_common(3))}")
         if s.versions:
             out.append(f"  cc version  {', '.join(sorted(s.versions))}")
+        if s.repos:
+            out.append(f"  repos       {'; '.join(sorted(s.repos))}")
         if s.subagents:
             out.append(f"  subagents   {s.subagents} sidechain record(s)")
 
@@ -1387,6 +1414,8 @@ def main(argv=None):
                    help=f"max chars --quote may emit (default {DEFAULT_QUOTE_BUDGET})")
     p.add_argument("--lessons", action="store_true",
                    help="mine deterministic lesson candidates from transcript (no LLM)")
+    p.add_argument("--repos-only", action="store_true",
+                   help="print one absolute repo path per line and exit 0 (for verify-state.py)")
     args = p.parse_args(argv)
 
     paths = find_transcripts(args)
@@ -1408,6 +1437,15 @@ def main(argv=None):
 
     scans = [Scan(f).run() for f in paths]
 
+    if args.repos_only:
+        # Collect all repos from all scans and print one per line
+        all_repos = set()
+        for s in scans:
+            all_repos.update(s.repos)
+        for repo in sorted(all_repos):
+            print(repo)
+        return 0
+
     if args.json:
         print(json.dumps([{
             "transcript": s.path, "bytes": s.bytes, "records": s.lines,
@@ -1416,6 +1454,7 @@ def main(argv=None):
             "cwds": dict(s.cwds), "branches": dict(s.branches),
             "versions": sorted(s.versions),
             "files": {p: n for p, n in sorted(s.files.items())},
+            "repos": sorted(s.repos),
             "surfaces": {p: classify(p) for p in sorted(s.files)},
             "tools": dict(s.tools),
             "commands": {k: _uniq(redact(condense(k, c)) for c in v) for k, v in s.cmds.items()},
