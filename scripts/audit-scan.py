@@ -120,6 +120,102 @@ _SHELL_REMOVE_RES = (
     re.compile(_CMDPOS + r"mv\s+(?:-\S+\s+)*([\w./~$-]+)\s+\S+"),
 )
 
+# WRITES FROM INSIDE AN INTERPRETER HEREDOC. `python3 - <<'PY'` whose body does `open(p,'w')` names
+# its target in no shell construct at all, and the prose-masking above deliberately strips bodies,
+# so the path was traceless. MEASURED 2026-09-11: one session reported 4 durable records of 16
+# changed; another listed zero memory files while two had been rewritten. Every miss had this shape.
+#
+# Precision is the whole design. A body that merely MENTIONS a path (a fixture, a docstring, a
+# read) must stay quiet, so a literal is reported only when it reaches a WRITE CALL — directly, or
+# through a variable assigned from it. Bodies are parsed as Python-ish text, which is what nearly
+# every such heredoc in this workflow is; other interpreters get the same treatment for the common
+# `open(...,'w')` / `.write_text` shapes and nothing else.
+_INTERP_HEREDOC_RE = re.compile(
+    r"(?:^|\n|&&|\|\||;|\()\s*(?:python3?|python3\.\d+|node|ruby|perl)\b[^\n<]*<<-?\s*(['\"]?)"
+    r"([A-Za-z_][A-Za-z0-9_]*)\1[^\n]*\n")
+_STR_LIT = r"""(?P<q>['"])(?P<lit>[^'"\s{}]+)(?P=q)"""
+# `x = <rhs>` — the RHS is resolved later from the literals and known variables it contains.
+_ASSIGN_RE = re.compile(r"^\s*(\w+)\s*=\s*(?!=)(.+)$")
+_HD_WRITE_RES = (
+    re.compile(r"\b(\w+)\.write_(?:text|bytes)\("),                       # var.write_text(
+    re.compile(r"\bopen\(\s*(\w+)\s*,\s*['\"][wax]"),                     # open(var, 'w')
+    re.compile(r"\bopen\(\s*" + _STR_LIT + r"\s*,\s*['\"][wax]"),        # open('lit', 'w')
+    re.compile(r"\bPath\(\s*" + _STR_LIT + r"\s*\)\.write_(?:text|bytes)\("),
+    re.compile(r"\bos\.(?:replace|rename)\(\s*[^,]+,\s*(?:(\w+)|" + _STR_LIT + r")\s*\)"),
+    re.compile(r"\bshutil\.(?:copy\w*|move)\(\s*[^,]+,\s*(?:(\w+)|" + _STR_LIT + r")\s*\)"),
+)
+
+_HD_PATH_FUNCS = {"Path", "pathlib.Path", "os.path.join", "os.path.expanduser", "expanduser",
+                  "resolve", "str", "PurePath"}
+
+
+def _hd_eval(rhs, env):
+    """Statically evaluate a path EXPRESSION, or None if it is anything else.
+
+    Accepts only literals, f-strings over known names, known variables and the path constructors
+    in _HD_PATH_FUNCS joined by `/`, `+` or `,`. Any other identifier — `s.replace`, `p.read_text`
+    — makes the whole RHS not-a-path, which is what keeps `s = s.replace("a/b.md", …)` from
+    binding `s` to a path that is never written."""
+    rhs = re.sub(r"(?:pathlib\.)?Path\.home\(\)", '"~"', rhs.strip().rstrip(";"))
+    parts = []
+    for q, lit, ident, punct in re.findall(
+            r"""f?(['"])(.*?)\1|([A-Za-z_]\w*(?:\.\w+)*)|(\S)""", rhs):
+        if q:
+            if not lit or re.search(r"\s", lit):
+                return None
+            lit = re.sub(r"\{(\w+)\}", lambda m: env.get(m.group(1), "\0"), lit)
+            if "\0" in lit or "{" in lit:
+                return None
+            parts.append(lit)
+        elif ident:
+            if ident in env:
+                parts.append(env[ident])
+            elif ident not in _HD_PATH_FUNCS:
+                return None
+        elif punct not in "()/,+.":
+            return None
+    if not parts:
+        return None
+    path = ""
+    for p in parts:
+        path = p if (not path or p.startswith(("/", "~"))) else path.rstrip("/") + "/" + p.lstrip("/")
+    if "/" not in path and not re.search(r"\.\w{1,6}$", path):
+        return None  # a bare word ("w", "utf-8") is not a path
+    return path
+
+
+def _heredoc_write_targets(body):
+    """Paths an interpreter heredoc body WRITES — never ones it only names. See _INTERP_HEREDOC_RE.
+
+    Triple-quoted strings and full-line comments are blanked first: they are where a body carries
+    fixture text and prose, and an `open(x, 'w')` quoted inside one is data, not a call."""
+    body = re.sub(r"('''|\"\"\")(.*?)\1", '""', body, flags=re.S)
+    env, out = {}, []
+    # `;` splits too: `p="x.json"; open(p,"w").write(s)` is the common one-liner shape. A split
+    # inside a string only yields fragments that fail to evaluate, so it costs no precision.
+    for line in re.split(r"\n|;", body):
+        if line.lstrip().startswith("#"):
+            continue
+        for rx in _HD_WRITE_RES:
+            for m in rx.finditer(line):
+                gd = m.groupdict()
+                if gd.get("lit"):
+                    tgt = _hd_eval(gd["q"] + gd["lit"] + gd["q"], env)
+                else:
+                    name = next((g for g in m.groups() if g), None)
+                    tgt = env.get(name)
+                if tgt:
+                    out.append(tgt)
+        am = _ASSIGN_RE.match(line)
+        if am:
+            val = _hd_eval(am.group(2), env)
+            if val is not None:
+                env[am.group(1)] = val
+            else:
+                env.pop(am.group(1), None)  # rebound to a non-path: forget the old binding
+    return out
+
+
 CMD_PATTERNS = [
     ("waypoints",  re.compile(_CMDPOS + r"waypoints(?:\.py)?\s+(?!--help|-h\b)\S+")),
     ("git-commit", re.compile(_CMDPOS + r"git\s[^\n|;&]*\bcommit\b")),
@@ -572,6 +668,7 @@ class Scan:
         # self.files by construction — see _SHELL_WRITE_RES. Kept separate so the two are
         # never conflated in the report.
         self.shell_writes = collections.Counter()   # abs path -> times named
+        self.heredoc_writes = collections.Counter() # abs path -> times written from a heredoc body
         self.saw_shell_write_cmd = False            # did any write-shaped shell command appear?
         self.shell_removes = collections.Counter()  # abs path -> times named as a removal target
         self.saw_shell_remove_cmd = False           # did any removal-shaped shell command appear?
@@ -705,6 +802,7 @@ class Scan:
             return
         self._mine_shell_writes(probe, cmd)
         self._mine_shell_removes(probe, cmd)
+        self._mine_heredoc_writes(cmd)
         subj = _subject_of(cmd)
         subj_tail = SUBJ_MARK + " ".join(subj.split())[:200] if subj else ""
         if AUTOMATION_READONLY.search(probe):
@@ -796,6 +894,35 @@ class Scan:
             base = os.path.normpath(base)
 
         return base
+
+    def _mine_heredoc_writes(self, raw):
+        """Write targets named only inside an INTERPRETER heredoc body. See _INTERP_HEREDOC_RE.
+
+        Reads the RAW command (the probe has the bodies stripped, which is the point of it). The
+        cwd for a relative literal is the one in effect at the heredoc's opener, computed on the
+        shell code before it — earlier bodies are stripped first, so a `cd` quoted in one cannot
+        move the base for the next."""
+        if "<<" not in raw:
+            return
+        for hm in _INTERP_HEREDOC_RE.finditer(raw):
+            tag = hm.group(2)
+            start = hm.end()
+            end = re.search(r"(?m)^\s*" + re.escape(tag) + r"\s*$", raw[start:])
+            body = raw[start:start + end.start()] if end else raw[start:]
+            targets = _heredoc_write_targets(body)
+            if not targets:
+                continue
+            self.saw_shell_write_cmd = True
+            prefix = shell_only(raw[:hm.start() + 1])
+            for tgt in targets:
+                if not os.path.isabs(tgt) and not tgt.startswith("~"):
+                    base = self._cwd_at_position(prefix, len(prefix))
+                    if not base:
+                        continue
+                    tgt = os.path.join(base, tgt)
+                tgt = self._durable_target(tgt)
+                if tgt:
+                    self.heredoc_writes[tgt] += 1
 
     def _mine_shell_removes(self, probe, raw):
         """Pull REMOVAL targets out of a shell command. See _SHELL_REMOVE_RES for why separate."""
@@ -939,7 +1066,7 @@ def report(scans, args):
         elif s.saw_shell_write_cmd or s.saw_shell_remove_cmd:
             empty_msg = ("no path RECOGNISED — write/remove commands DID run, but none named a "
                          "path on a durable surface.\n  This is a gap in THIS scan, not evidence "
-                         "that nothing changed: a path named only inside a\n  heredoc body is "
+                         "that nothing changed: a script written to a file and run\n  later is "
                          "invisible here. Cross-check with `ls -lt`/`find -newermt` over the "
                          "span.")
         else:
@@ -956,12 +1083,17 @@ def report(scans, args):
         # Durable records the SHELL wrote. Anything already carrying a delta or a writing-tool
         # record is dropped: it is confirmed by stronger evidence and repeating it here would
         # imply the weaker finding is a separate change.
-        shell_only_writes = sorted(sp for sp in s.shell_writes
+        # Heredoc-body writes join the same lower-confidence list, tagged so the reader knows the
+        # evidence is a write CALL inside interpreter code rather than a shell redirect.
+        shell_only_writes = sorted(sp for sp in set(s.shell_writes) | set(s.heredoc_writes)
                                    if sp not in touched and sp not in s.files)
         if shell_only_writes:
             _section(out, "DURABLE RECORDS WRITTEN BY A SHELL COMMAND "
                           "(lower confidence — a named path is weaker evidence than a delta)",
-                     [f"{sp}   [{classify(sp)}]" for sp in shell_only_writes])
+                     [f"{sp}   [{classify(sp)}]"
+                      + ("  (inside a heredoc body)" if sp in s.heredoc_writes
+                         and sp not in s.shell_writes else "")
+                      for sp in shell_only_writes])
 
         # Removals get their own section rather than joining the writes: "this file was deleted"
         # and "this file was edited" call for completely different follow-up, and a deletion of a

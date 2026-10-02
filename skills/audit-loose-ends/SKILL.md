@@ -55,10 +55,13 @@ auto-mode sessions, which are instructed to prefer `sed`/heredoc over the Edit t
 
 **Lesson candidates.** The scanner prints a `lessons: N candidates (c corrections, r retries, d decisions, s self-corrections)` summary line. If N>0, one line at end of pass: "N lesson candidates found (c corrections, r retries, d decisions, s self-corrections) — run harvest-lessons? (~N×1.5K budgeted)". Otherwise say nothing. The harvest-lessons sub-skill is opt-in and budgeted.
 
-**The residual blind spot, worth knowing because it is invisible.** A path that appears only *inside*
-a heredoc body — `cat > /tmp/patch.py <<'PY'` where the Python then rewrites a memory file — is still
-undetected, because no shell redirect names it. So `ls -lt` over the records dir, bounded by the
-printed session span, remains the cross-check for a session that scripted its edits. One command, and
+**Heredoc bodies, and what is still blind.** Since 0.11.0 a write CALL inside an interpreter
+heredoc (`python3 - <<'PY'` whose body does `open(p,'w')`, `Path(...).write_text`, `os.replace`) is
+listed in the shell section, tagged *(inside a heredoc body)* — a path merely NAMED in the body is not.
+Still undetected: a script written to a file and run later (`cat > /tmp/patch.py <<'PY'` then
+`python3 /tmp/patch.py`), a target computed at runtime, and non-Python bodies beyond the plain `open`
+shapes. So `ls -lt` over the records dir, bounded by the printed session span, remains the
+cross-check for a session that scripted its edits. One command, and
 it is what caught the original under-report. Read-only, and it reports its own compression so the saving is
 measured rather than claimed (~600× on a 4.8 MB transcript).
 
