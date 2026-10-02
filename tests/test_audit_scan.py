@@ -1043,6 +1043,59 @@ eq(len([p for p in s.repos if "/rf-" in p]), 2, "a non-git command adds no repo"
 # The scan should record repos from cd and git -C commands
 print("== repo tracking tests added ==")
 
+# ------------------------------------------- writes from INSIDE an interpreter heredoc body (0.11.0)
+print("== heredoc-body writes: python3 - <<PY whose body writes a durable file ==")
+# MEASURED 2026-09-11: one session reported 4 durable records of 16 changed, another listed zero
+# memory files while two had been rewritten — every miss was a write CALL inside a heredoc body.
+HD_POS = [
+    (f"cd {MEM} && python3 - <<'PY'\np='cost-tracker-project.md'\ns=open(p).read()\n"
+     f"open(p,'w').write(s)\nPY", f"{MEM}/cost-tracker-project.md", "open(var,'w') after cd"),
+    ("cd /Users/x/repo && python3 - <<'PY'\nimport pathlib\np = pathlib.Path(\"CHANGELOG.md\")"
+     "; s = p.read_text()\np.write_text(s)\nPY", "/Users/x/repo/CHANGELOG.md", "Path().write_text"),
+    ("cd ~ && python3 - <<'PY'\np=\".claude/CLAUDE.md\"; s=open(p).read()\n"
+     "open(p,\"w\").write(s)\nPY", os.path.expanduser("~/.claude/CLAUDE.md"),
+     "semicolon one-liner, relative to cd ~"),
+    (f"python3 - <<'PY'\nimport pathlib\nM = '{MEM}'\nmp = pathlib.Path(M) / 'MEMORY.md'\n"
+     "mp.write_text('x')\nPY", f"{MEM}/MEMORY.md", "Path(var) / literal"),
+    (f"python3 <<'EOF'\nopen('{MEM}/z.md', 'a').write('x')\nEOF", f"{MEM}/z.md",
+     "open(literal,'a')"),
+    (f"python3 - <<'PY'\nimport os\nos.replace('/tmp/t', '{MEM}/r.md')\nPY", f"{MEM}/r.md",
+     "os.replace onto a record"),
+]
+for cmd, want, label in HD_POS:
+    got = scan_records([rec_bash(cmd)]).heredoc_writes
+    check(os.path.normpath(want) in got, f"heredoc write fires: {label}", f"got={list(got)}")
+
+print("== heredoc-body negatives: a body that only NAMES a path must stay quiet ==")
+HD_NEG = [
+    (f"python3 - <<'PY'\nprint(open('{MEM}/a.md').read())\nPY", "a READ is not a write"),
+    (f"python3 - <<'PY'\np='{MEM}/a.md'\ns=open(p).read()\nprint(len(s))\nPY",
+     "a path bound to a variable but never written"),
+    (f"python3 - <<'PY'\nimport json\nrecs = [\"cat > {MEM}/x.md\"]\n"
+     "open('/tmp/fx.jsonl','w').write(json.dumps(recs))\nPY",
+     "a durable path inside FIXTURE data, while the real write goes to /tmp"),
+    (f"python3 - <<'PY'\ns = '''\nopen('{MEM}/q.md','w')\n'''\nprint(s)\nPY",
+     "a write call quoted inside a triple-quoted string"),
+    (f"python3 - <<'PY'\n# open('{MEM}/c.md','w')\nprint(1)\nPY", "a write call in a comment"),
+    (f"python3 - <<'PY'\np='{MEM}/a.md'\np = 'other'\nopen(p,'w')\nPY",
+     "a rebound variable no longer points at the record"),
+    (f"python3 - <<'PY'\nout = cfg.get('{MEM}/a.md')\nopen(out,'w')\nPY",
+     "a call on an unknown name (cfg.get) does not bind its result to a path"),
+    (f"cat > /tmp/patch.py <<'PY'\nopen('{MEM}/a.md','w')\nPY",
+     "a script WRITTEN to /tmp is not run — not an interpreter heredoc"),
+]
+for cmd, label in HD_NEG:
+    got = scan_records([rec_bash(cmd)]).heredoc_writes
+    check(not got, f"heredoc write quiet: {label}", f"got={list(got)}")
+
+_hd = render([rec_bash(f"python3 - <<'PY'\nopen('{MEM}/hd.md','w').write('x')\nPY")])
+check(f"{MEM}/hd.md" in _hd and "inside a heredoc body" in _hd,
+      "the digest lists a heredoc-body write, tagged as such")
+_hd_both = render([rec_bash(f"python3 - <<'PY'\nopen('{MEM}/both2.md','w')\nPY"),
+                   rec_delta(MEM, "both2.md")])
+check(_hd_both.count(f"{MEM}/both2.md") == 1,
+      "a heredoc write with a delta record is not double-reported")
+
 print()
 if _fail:
     print(f"FAILURES: {_fail}")

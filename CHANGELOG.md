@@ -1,5 +1,36 @@
 # Changelog
 
+## [0.11.0] — 2026-10-02
+
+### Fixed — writes from INSIDE an interpreter heredoc body are no longer invisible
+
+The last named blind spot of `audit-scan.py`. `python3 - <<'PY'` whose body does `open(p,'w')` names
+its target in no shell construct, and the prose-masking strips bodies on purpose, so the path left no
+trace. Measured 2026-09-11: session `06885ad1` listed **zero** memory files while
+`cost-tracker-project.md` and `MEMORY.md` had both been rewritten; session `abf0127b` named 4 durable
+records when 16 had changed, missing `~/.claude/CLAUDE.md` and `MEMORY.md`.
+
+- New `_mine_heredoc_writes()` reads the RAW command, finds interpreter heredocs
+  (`python`/`node`/`ruby`/`perl`), and reports a path only when it reaches a **write call** —
+  `open(x,'w'|'a'|'x')`, `.write_text/.write_bytes`, `os.replace/rename`, `shutil.copy*/move` —
+  directly or through a variable assigned from a path expression (literals, f-strings over known
+  names, `Path(...) / ...`, `os.path.join`). Lines split on `;` too, for one-liners.
+- **Precision first.** Triple-quoted strings and comments are blanked; a variable rebound to a
+  non-path is forgotten; a call on any unknown name (`s.replace(...)`, `cfg.get(...)`) binds nothing;
+  `cat > /tmp/x.py <<PY` is a file write, not an interpreter heredoc. Relative literals resolve
+  against the cwd in effect at the heredoc opener, reusing the chained-`cd` logic from 0.8.0.
+- Results join the existing lower-confidence `WRITTEN BY A SHELL COMMAND` section, tagged
+  *(inside a heredoc body)*; a path with a delta record is still reported once.
+- **Dogfood on the ground truth:** `06885ad1` now names `cost-tracker-project.md` and `MEMORY.md`
+  (plus 11 other genuinely written files); `abf0127b` now names `~/.claude/CLAUDE.md`, `MEMORY.md` and
+  the cost-tracker CHANGELOG/ROADMAP/SKILL. Spot-checked hits were all real writes.
+- Still blind (documented in SKILL.md): a script written to a file and run later, runtime-computed
+  targets. The `ls -lt` cross-check stays prescribed.
+
+Tests: 6 positives, 8 negatives (each mention-only shape the waypoint warned about), 2 render checks.
+Mutation-tested 9 properties, 9/9 caught; one negative fixture that let the unknown-name guard
+survive was tightened until it failed.
+
 ## [0.10.0] — 2026-10-02
 
 ### Added — waypoint integration (`scripts/waypoint-reconcile.py`)
