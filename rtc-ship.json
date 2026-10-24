@@ -6,6 +6,7 @@
 
   "manifest": ".claude-plugin/plugin.json",
   "changelog": "CHANGELOG.md",
+  "test_cmd": "python3 tests/test_audit_scan.py && for t in tests/test_*.sh; do bash \"$t\" || exit 1; done",
 
 
 

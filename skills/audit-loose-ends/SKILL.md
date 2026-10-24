@@ -252,6 +252,21 @@ Scan each surface and fix drift before closing:
    the transcript rather than in a file you can name — which is why it belongs in the audit rather
    than in the tool.
 
+   Three more lessons from real incidents, for the same step:
+   - **Committed fixtures hold key TEMPLATES, never literals.** GitHub push protection rejected a test
+     file because its synthetic `sk_live_…` / `xoxb-…` samples had a real vendor shape: a fake value with a
+     real shape is still a push blocker. Write `sk-ant-api03-{A:95}`, `AKIA{U:16}` and expand them at
+     load time; then the file cannot hold a leaked key, and a scan with `--no-corpus-skip` proves it.
+   - **Do not print a secret and then try to scrub it.** An improvised
+     `sed 's/\(TOKEN\|KEY\)=.*/\1=<redacted>/'` leaked a token in cleartext: BSD/macOS `sed` has no `\|`
+     in a basic regex, so the group never matched and `sed` exited 0. Filter by NAME before any value is
+     emitted (`env | cut -d= -f1`, or an explicit list of variables); a value that was never printed
+     cannot leak. If you must scrub, use `sed -E` / `grep -E` and verify the placeholder in the output.
+   - **A key found only in a LOCAL transcript was not leaked.** Scrub it in place with the scanner and
+     say so in one line; recommend rotation only for a secret that actually left the machine (pushed,
+     posted to a service, committed to a published repo). Rotation advice for a local-only key is an
+     alarm over nothing that costs the user's attention.
+
 7. **Local record repos** (`~/.claude/plans/`, and any other durable record directories outside
    project repos): committed and clean? This is a general plugin step, not audit-loose-ends specific,
    but lives here because it's the reconciliation pass.

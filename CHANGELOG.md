@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.11.1] — 2026-10-24
+
+### Added — three secret-handling lessons in step 6
+
+- Committed fixtures hold key TEMPLATES: a fake value with a real vendor shape still trips GitHub push protection.
+- Never print a secret and scrub it afterwards: BSD `sed` has no BRE `\|`, so an improvised redaction leaked a
+  token while exiting 0. Filter by name before any value is emitted.
+- A key found only in a LOCAL transcript is scrubbed, not rotated.
+- `rtc-ship.json` declares the full test command, so the shell suites and the framework-free scanner tests
+  gate a release too. No behaviour change.
+
 ## [0.11.0] — 2026-10-02
 
 ### Fixed — writes from INSIDE an interpreter heredoc body are no longer invisible
