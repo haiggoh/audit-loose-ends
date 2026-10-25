@@ -1236,7 +1236,13 @@ def quote(paths, pattern, budget):
 # --------------------------------------------------------------------------- lesson mining (deterministic, no LLM)
 
 _LESSON_CORRECTION = re.compile(r"\b(?:no,|that'?s\s+wrong|actually,?|instead,?|why\s+did\s+you|I\s+said|don'?t)\b", re.I)
-_LESSON_SELF_CORRECTION = re.compile(r"\b(?:CORRECTED|turned\s+out|was\s+wrong|disproved|false\s+negative|premise\s+had\s+decayed)\b", re.I)
+# 0.12.1 (obs 0038): a self-correction needs BOTH a reversal signal AND an OWNED failure — one
+# token alone fired 13/13 on outcome prose ("the corrected trailer", "it turned out the deploy
+# was live"), while the real corrections hid among them. Bare "CORRECTED" is dropped entirely:
+# it was the single noisiest token and every genuine use also carries an owned failure.
+_LESSON_SELF_CORRECTION = re.compile(r"\b(?:was\s+wrong|turned\s+out|disproved|false\s+negative|premise\s+had\s+decayed|conflat\w+|fell\s+into)\b", re.I)
+_LESSON_OWNED_FAILURE = re.compile(r"\b(?:my|our)\b[^.\n]{0,80}?\b(?:wrong|incorrect|mistake|mistaken|inverted|backwards)\b"
+                                   r"|\bI\s+(?:was\s+wrong|conflat\w+|fell\s+into|misread|assumed\s+wrongly)\b", re.I)
 # Matched ONLY against the text of an ERRORED tool result (see _errored_tool_results): the bare word
 # "schema" anywhere in a record flagged hook text, prose and edit payloads — 24/24 noise on 2026-09-30.
 _LESSON_SCHEMA_ERROR = re.compile(r"InputValidationError|\bExpected\s+\w+,\s+got\s+\w+|\bvalidation\s+error\b|"
@@ -1260,8 +1266,9 @@ def _is_correction_prompt(text):
     return bool(_LESSON_CORRECTION.search(text))
 
 def _is_self_correction(text):
-    """Check if assistant text contains a self-correction signal."""
-    return bool(_LESSON_SELF_CORRECTION.search(text))
+    """Check if assistant text contains a self-correction signal: a reversal AND an owned
+    failure in the same text (0.12.1, obs 0038). An outcome report carries at most one."""
+    return bool(_LESSON_SELF_CORRECTION.search(text) and _LESSON_OWNED_FAILURE.search(text))
 
 def _is_schema_error(text):
     """Check if text contains a schema validation error signal."""

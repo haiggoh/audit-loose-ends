@@ -1024,6 +1024,56 @@ try:
 finally:
     os.unlink(lesson_path)
 
+# --------------------------------------------------------------------------- 0.12.1 precision (obs 0038)
+print("== 0.12.1: a self-correction needs an OWNED failure + a reversal, not one token ==")
+# MEASURED 2026-10-24 (obs 0038): 13/13 "self-corrections" in one session were the agent's
+# routine outcome prose — "★ Insight" markers, "Committed with the corrected trailer",
+# "Mutation verified properly" — while the real corrections hid among them, indistinguishable.
+# One reversal token alone ("corrected", "turned out") fires on outcome reports; require an
+# OWNED failure (my/our/I + wrong|mistake|conflat|fell into|misread, in one span) AND a
+# reversal signal in the same text. Precision over recall: the harvest reads anchors by hand,
+# so a missed odd phrasing costs one glance, while a false positive costs a category's trust.
+SC_PATH_TMP = None
+sc_transcript = []
+sc_transcript.append({"type": "assistant", "timestamp": "2026-09-07T11:00:00Z", "sessionId": "sc-sess",
+    "message": {"content": [{"type": "text",
+        "text": "POS-OWNED But my 'no ledger write' reasoning was wrong: the local gate runs "
+                "before the cost-null guard, so the write guard passed."}]}})
+sc_transcript.append({"type": "assistant", "timestamp": "2026-09-07T11:00:01Z", "sessionId": "sc-sess",
+    "message": {"content": [{"type": "text",
+        "text": "POS-CONFLAT I conflated the two stores — the balance lives on the order, "
+                "not the customer."}]}})
+sc_transcript.append({"type": "assistant", "timestamp": "2026-09-07T11:00:02Z", "sessionId": "sc-sess",
+    "message": {"content": [{"type": "text",
+        "text": "POS-EXPECT my expectation was wrong; the fixture already includes the catch-all."}]}})
+sc_transcript.append({"type": "assistant", "timestamp": "2026-09-07T11:00:03Z", "sessionId": "sc-sess",
+    "message": {"content": [{"type": "text",
+        "text": "NEG-TRAILER Committed with the corrected trailer and pushed."}]}})
+sc_transcript.append({"type": "assistant", "timestamp": "2026-09-07T11:00:04Z", "sessionId": "sc-sess",
+    "message": {"content": [{"type": "text",
+        "text": "NEG-TURNEDOUT It turned out the deploy was already live."}]}})
+sc_transcript.append({"type": "assistant", "timestamp": "2026-09-07T11:00:05Z", "sessionId": "sc-sess",
+    "message": {"content": [{"type": "text",
+        "text": "NEG-VERIFIED Mutation verified properly; the cmp check confirmed it applied."}]}})
+sc_transcript.append({"type": "assistant", "timestamp": "2026-09-07T11:00:06Z", "sessionId": "sc-sess",
+    "message": {"content": [{"type": "text",
+        "text": "NEG-RECONCILES Everything reconciles now — the store is clean."}]}})
+
+with tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False) as fh:
+    for r in sc_transcript:
+        fh.write(json.dumps(r) + "\n")
+    sc_path = fh.name
+
+try:
+    r = run_audit([sc_path, "--lessons"])
+    eq(r.returncode, 0, "0.12.1 --lessons exits 0")
+    for pos in ("POS-OWNED", "POS-CONFLAT", "POS-EXPECT"):
+        check(pos in r.stdout, f"{pos}: an owned failure + reversal still counts as self-correction")
+    for neg in ("NEG-TRAILER", "NEG-TURNEDOUT", "NEG-VERIFIED", "NEG-RECONCILES"):
+        check(neg not in r.stdout, f"{neg}: outcome prose with one reversal token is not a self-correction")
+finally:
+    os.unlink(sc_path)
+
 # --------------------------------------------------------------------------- repo tracking (Task 1: --repos-only)
 print("== repo tracking (cd, git -C) ==")
 

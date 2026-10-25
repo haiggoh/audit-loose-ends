@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.12.1]
+
+### Fixed — the lessons classifier no longer mistakes outcome prose for self-corrections
+
+- Measured 2026-10-24 (obs 0038): one session's harvest reported 13/13 "self-corrections" that were
+  the agent's routine outcome prose — "★ Insight" markers, "Committed with the corrected trailer",
+  "Mutation verified properly" — while the real corrections hid among them, indistinguishable. One
+  reversal token alone ("corrected", "turned out") fires on outcome reports.
+- `_is_self_correction` now requires BOTH a reversal signal AND an owned failure (my/our/I +
+  wrong|mistake|conflat|fell into|misread, in one span); bare "CORRECTED" is dropped — the noisiest
+  token, and every genuine use also carries an owned failure.
+- Same-session A/B: the installed 0.11.1 flagged 3 candidates (one a pure plan statement); the fixed
+  classifier flags 2, both real. "I conflated …" is newly detected — the old token list never
+  contained it.
+
 ## [0.12.0]
 
 ### Fixed — the scanner can no longer report a clean result over paths it never opened
