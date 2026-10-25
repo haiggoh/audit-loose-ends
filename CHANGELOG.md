@@ -1,5 +1,33 @@
 # Changelog
 
+## [0.12.0]
+
+### Fixed — the scanner can no longer report a clean result over paths it never opened
+
+`redact-secret.py` skipped a missing file and skipped a directory, silently. Combined with a
+path list built by word-splitting `git status`/`git diff` output, that produced the worst
+shape of wrong answer: `0 occurrences across 222 files`, where a split had turned 27
+filenames into 222 paths and 195 of them did not exist. The count was in the output the
+whole time; nothing checked it.
+
+- **`--require`** makes a missing path or a directory FAIL, naming every offending path and
+  pointing at the count as the tell.
+- The summary now reports **named** *and* **examined**, and prints `N NOT EXAMINED` when they
+  differ — so the tell is visible even without the flag.
+- Skips stay VISIBLE in the default mode: hiding one is how the original result read as clean.
+
+### Added — `scripts/verify-paths.sh`, the guard that has a job again
+
+The guard lived in `~/.claude/scripts/`, outside any repo, while the audit procedure needed
+exactly this check and three memories pointed at it. It now ships with the plugin and is
+tested by `tests/test_verify_paths.sh` (13 assertions, both directions):
+
+    git diff --staged --name-only -z | scripts/verify-paths.sh --null
+
+`--null` reads NUL-delimited paths, so a filename containing a space cannot be split — which
+is the failure the guard exists to stop. The skill's step 6 now documents both defences and
+explains why the count is the tell.
+
 ## [0.11.1] — 2026-10-24
 
 ### Added — three secret-handling lessons in step 6

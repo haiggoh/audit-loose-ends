@@ -42,6 +42,10 @@ Usage
   # prove the filter still catches every known key shape
   redact-secret.py --self-test
 
+  # FAIL instead of skipping when a named path is missing or is a directory. Use this when the path
+  # list came from something that can word-split (git status/diff): a skip is silent, a count is not.
+  redact-secret.py --scan-only --require FILE...
+
 Why the layers
 --------------
 Hand-rolled greps for `sk-[A-Za-z0-9]{8}|password|bearer` produce hits like
@@ -549,6 +553,10 @@ def main(argv: list[str]) -> int:
                     help="path to the self-test corpus (default: %(default)s)")
     ap.add_argument("--no-corpus-skip", action="store_true",
                     help="scan a declared test-corpus file instead of reporting it SKIPPED")
+    ap.add_argument("--require", action="store_true",
+                    help="FAIL when a named path is missing or is a directory, instead of "
+                         "skipping it. Use it when the path list came from something that can "
+                         "word-split (git status, git diff): a skip is silent, a count is not.")
     args = ap.parse_args(argv)
 
     if args.self_test:
@@ -568,22 +576,56 @@ def main(argv: list[str]) -> int:
     pattern = re.compile(args.pattern.encode() if args.pattern else DEFAULT_PATTERN)
 
     total, reported, failures = 0, 0, 0
+    examined, missing = 0, []
     for path in args.files:
         if os.path.isdir(path):
+            if args.require:
+                missing.append("%s (a directory — name the files you mean)" % path)
+                continue
             print("  %-58s skipped (a directory — name the files you mean)" % path)
             continue
+        if not os.path.exists(path):
+            # FAIL LOUD, never skip quietly. THE INCIDENT: a word-split turned 27 filenames into
+            # 222 paths; this scanner skipped the 195 that did not exist and printed
+            # "0 occurrences across 222 files" — a confident clean result over input it never
+            # opened, with the tell (222 vs 27) sitting in plain sight. `--require` makes that
+            # impossible; without it the count below still says how many were really opened.
+            if args.require:
+                missing.append(path)
+                continue
         n, r, note = process(path, args, secret, pattern)
+        # Always say what happened to the path. A skip must stay VISIBLE even when it is not
+        # fatal — hiding it is how the original "0 occurrences across 222 files" read as clean.
+        print("  %-58s %s" % (path if len(path) < 58 else "…" + path[-57:], note))
+        if note.startswith("skipped ("):
+            # Unreadable for another reason (permissions, a dangling symlink, missing file): it was
+            # NAMED and it was NOT examined, so it must not be counted as examined either.
+            continue
+        examined += 1
         total += n
         reported += r
         if note.startswith("ROLLED BACK"):
             failures += 1
-        print("  %-58s %s" % (path if len(path) < 58 else "…" + path[-57:], note))
+
+    if missing:
+        print("✖ %d of %d named path(s) DO NOT EXIST (--require):" % (len(missing), len(args.files)),
+              file=sys.stderr)
+        for m in missing:
+            print("    missing: %s" % m, file=sys.stderr)
+        print("  a tool that skips missing files reports a clean result over input it never opened."
+              " Fix the path list — check its COUNT against what you meant to name.", file=sys.stderr)
 
     verb = "would redact" if args.scan_only else "redacted"
-    print("%s %d occurrence(s) across %d named file(s)%s%s"
-          % (verb, total, len(args.files),
+    # NAMED and EXAMINED are different numbers, and only one of them means anything. When they
+    # disagree the scan covered less than the caller believes, which is the whole failure mode.
+    print("%s %d occurrence(s) across %d named file(s), %d examined%s%s%s"
+          % (verb, total, len(args.files), examined,
              "; %d report-only assignment hit(s)" % reported if reported else "",
-             "; %d rolled back" % failures if failures else ""))
+             "; %d rolled back" % failures if failures else "",
+             "; %d NOT EXAMINED" % (len(args.files) - examined)
+             if len(args.files) - examined else ""))
+    if missing:
+        return 1
     return 1 if failures else 0
 
 

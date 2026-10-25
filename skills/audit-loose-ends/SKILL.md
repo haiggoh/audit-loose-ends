@@ -231,6 +231,21 @@ Scan each surface and fix drift before closing:
    "$CLAUDE_PLUGIN_ROOT/scripts/redact-secret.py" --scan-only [--explain-filtered] FILE...
    ```
 
+   **Build the path list unsplittably, and check the count.** A path list assembled from
+   `git status`/`git diff` output can be word-split, and this scanner skips a missing file rather
+   than failing — so a mangled list produces a confident clean result over paths it never opened.
+   Measured 2026-10-25: a split turned 27 filenames into 222 paths and the scanner reported
+   `0 occurrences across 222 files`. Two defences, and use both:
+
+   ```sh
+   git status --porcelain -z | … | xargs -0 …        # NUL-delimited: un-splittable by construction
+   "$CLAUDE_PLUGIN_ROOT/scripts/verify-paths.sh" --null   # guard: FAILS naming every missing path
+   "$CLAUDE_PLUGIN_ROOT/scripts/redact-secret.py" --scan-only --require FILE...   # or make the scanner itself fail
+   ```
+
+   The scanner's summary now distinguishes **named** from **examined** and prints
+   `N NOT EXAMINED` when they differ, so the tell is in the output even without `--require`.
+
    An improvised pattern (`grep -inE "sk-[A-Za-z0-9]{8}|password|bearer"`) has no word-boundary, no
    shape test and no value test, so it flags `task-specific`, `on-disk-cache`, `--password` as a flag
    *name* and `MAX_OUTPUT_TOKENS=8192` — and a real key hides among them. The scanner applies five

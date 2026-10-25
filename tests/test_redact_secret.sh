@@ -93,3 +93,21 @@ python3 "$SCANNER" --scan-only "$TMP" | grep -q 'clean'
 check $? "re-scanning a redacted file is clean (no placeholder re-flagging)"
 
 [ "$fail" = 0 ] && echo "ALL PASS" || { echo "FAILURES"; exit 1; }
+
+# 6) a MISSING path must be able to FAIL, and the count must be honest.
+# The incident this fixes: a word-split turned 27 filenames into 222 paths, the scanner skipped the
+# missing ones, and it reported "0 occurrences across 222 files" — a confident clean result over
+# 195 paths it never opened. The number was in the output; nobody checked it.
+D="$(mktemp -d)"; printf 'sk-ant-api03-%sxy\n' "$(python3 -c 'print("Ab3"*31)')" > "$D/real.md"
+OUT="$(python3 "$SCANNER" --scan-only "$D/real.md" "$D/ghost.md")"
+echo "$OUT" | grep -q 'skipped'; check $? "a missing path is reported as skipped by default"
+echo "$OUT" | grep -q 'across 2 named'; check $? "the summary says how many were NAMED"
+echo "$OUT" | grep -q '1 examined'; check $? "and how many were EXAMINED"
+RC=0; python3 "$SCANNER" --scan-only --require "$D/real.md" "$D/ghost.md" >/dev/null 2>&1 || RC=$?
+[ "$RC" != 0 ]; check $? "--require FAILS when a named path is missing"
+python3 "$SCANNER" --scan-only --require "$D/real.md" >/dev/null 2>&1
+check $? "--require passes when every named path exists"
+RC=0; python3 "$SCANNER" --scan-only --require "$D" >/dev/null 2>&1 || RC=$?
+[ "$RC" != 0 ]; check $? "--require FAILS on a directory rather than skipping it"
+python3 "$SCANNER" --help 2>&1 | grep -q -- '--require'; check $? "--help documents --require"
+rm -rf "$D"
