@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.12.2]
+
+### Added — harvest-lessons: match rule strength to its reader; the promotion ladder
+
+- The disposition step now says the STRENGTH of a promoted rule is decided together with its
+  LAYER: a zero-context reader (a fresh session, a successor) earns a blunt, unconditional
+  form — nuance is what such a reader cannot be trusted to re-derive — while a reader who
+  understands the mechanism can carry a scoped rule without loss.
+- And before inventing a layer, the ladder runs: hook → one CLAUDE.md line → the owning
+  skill's body → a new lean skill → a playbook; promotion retires the source (a dated
+  "historical — canonical is X" header, same day). The ladder's home stays CLAUDE.md
+  ("Where rules live"); the skill carries the lean operational pointer, not a restatement.
+  (Batch C of the 2026-10-25 playbook plan.)
+
 ## [0.12.1]
 
 ### Fixed — the lessons classifier no longer mistakes outcome prose for self-corrections

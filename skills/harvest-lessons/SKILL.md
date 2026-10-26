@@ -42,6 +42,10 @@ The total cost is capped by `candidates × budget`, not by session length.
 
 **Promote the GENERAL principle wherever one applies** (standing instruction 2026-09-24). An observation often arrives as one domain's case of a rule that holds everywhere — closing it as "covered" because the instance is recorded leaves the general rule unwritten.
 
+**Match the rule's strength to its reader** — decide it together with the layer, not after. A rule aimed at a zero-context reader (a fresh session, a successor with none of this conversation) earns a blunt, unconditional form ("never do X"): nuance is exactly what such a reader cannot be trusted to re-derive. The same lesson for a reader who understands the mechanism can be scoped ("don't X unless Y, because Z") without loss. A blunt rule placed in a scoped context breeds exceptions; a scoped rule placed where zero-context readers land is silently over-trusted.
+
+**Before inventing a layer, run the ladder** (CLAUDE.md "Where rules live" owns it): hook (mechanically checkable ⇒ a barrier beats prose and costs no context until it fires) → one terse CLAUDE.md line → the body of the EXISTING skill that owns the task → a new lean skill (`disable-model-invocation: true` when only the user triggers it) → a playbook (detailed workflows, worked examples, incident history). Promotion retires the source: a playbook promoted into a skill gets a dated "historical — canonical is X" header the same day, and later edits go to the canonical layer only.
+
 ### 4. Skill-improvement lessons → task-observer log (soft dependency)
 
 Locate the log — never assume a path (it is user-scope in task-observer 3.x, per-project before):
