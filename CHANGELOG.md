@@ -1,5 +1,37 @@
 # Changelog
 
+## [0.13.0] — 2026-10-26 — the entry points resolve per call, so an update needs no re-wiring
+
+### Added — shims, not symlinks, for the two scripts other plugins call
+
+- `install/link-shortcuts.sh` installs `~/.claude/scripts/{redact-secret.py,memory-index-audit.py}`
+  as **shims** instead of the symlinks they were. A symlink freezes the version at install
+  time, so every plugin update left both entry points running the OLD copy until somebody
+  re-ran the wiring by hand — and both are consumed by other plugins' flows, where a stale
+  secret-scanner or a stale memory-index sweep is the failure nobody sees.
+- The shim body is `install/shim-template.sh`, the same contract cost-tracker's
+  wire-statusline.sh established: it resolves per call in one documented order
+  (`AUDIT_LOOSE_ENDS_PLUGIN` → the `installPath` that `installed_plugins.json` records →
+  the highest cache dir → exit 1), answers `--which` with the target it would exec, and
+  forwards every other argument untouched — intercepting `--help` would break any target
+  that takes its own.
+- The resolution cache is keyed on the registry's **content checksum**, not its mtime: a
+  registry rewritten twice inside the same second has an identical mtime on macOS, so a
+  mtime-keyed cache serves the stale answer. Measured — it surfaced as a real failure in
+  cost-tracker.
+- Safety is unchanged from the symlink era and stricter where it matters: anything
+  replaced is copied to a timestamped backup with its mode preserved, and a plain file
+  this plugin did not write is **refused** (exit 1) unless `--force`.
+- `tests/test_link_shortcuts.sh` (new, 27 cases) with three mutation checks — an inert
+  registry step, an installer that writes symlinks, and an installer that refuses nothing
+  each turn the new assertions red.
+
+### Fixed
+
+- The two entry points were symlinks into a workspace checkout, so a branch switch there
+  silently changed what every other plugin's audit ran.
+
+
 ## [0.12.2]
 
 ### Added — harvest-lessons: match rule strength to its reader; the promotion ladder

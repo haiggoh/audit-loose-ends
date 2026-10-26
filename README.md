@@ -188,6 +188,27 @@ must report zero token hits.
 /plugin install audit-loose-ends@haiggoh
 ```
 
+### Wiring the two entry points
+
+Other plugins' flows call these through `~/.claude/scripts`, so those two paths must
+point at this plugin. `install/link-shortcuts.sh` installs them as **shims** — small
+generated files that resolve the installed copy on every call — not symlinks:
+
+```
+bash install/link-shortcuts.sh --dry-run   # show what would change, write nothing
+bash install/link-shortcuts.sh             # back up anything replaced, then install
+bash install/link-shortcuts.sh --force     # also replace a file this plugin did not write
+```
+
+Because the shims resolve per call, a plugin update takes effect with **no re-wiring**,
+and a branch switch in a workspace checkout changes nothing live. Re-running is safe:
+when both paths already carry the `# haiggoh-shim v1` header it changes nothing. Ask a
+shim where it resolved with `~/.claude/scripts/redact-secret.py --which`.
+
+Everything replaced is copied to `~/.claude/backups/audit-loose-ends-link-<timestamp>/`
+with its mode preserved. A plain file this plugin did not write is **refused** rather
+than overwritten unless you pass `--force`.
+
 ## Optional / disabling
 
 It's a plugin — disable or uninstall via `/plugin` if you don't want the reminder.
