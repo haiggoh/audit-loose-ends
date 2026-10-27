@@ -1274,6 +1274,46 @@ def _is_schema_error(text):
     """Check if text contains a schema validation error signal."""
     return bool(_LESSON_SCHEMA_ERROR.search(text))
 
+# The --self-test corpus (obs 0050): a deterministic scanner's zero is only a finding when
+# the scanner can be shown to fire. The corpus lives in tests/fixtures/ so sweeping this
+# repo does not keep re-auditing the fixtures; its magic first line declares it test data.
+_LESSON_CORPUS_CLASSES = {
+    "correction": _is_correction_prompt,
+    "self-correction": _is_self_correction,
+    "schema-error": _is_schema_error,
+}
+
+
+def _self_test_corpus(corpus_path):
+    """Run the planted lessons corpus through the SAME predicates the scanner runs.
+    Returns (fired, misses): a MUST line whose class does not fire, a MUSTNOT line that
+    fires, and malformed lines are all misses."""
+    misses, fired = [], 0
+    with open(corpus_path, encoding="utf-8", errors="replace") as fh:
+        lines = fh.read().splitlines()
+    for lineno, raw in enumerate(lines, 1):
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("MUSTNOT ::"):
+            text = line[len("MUSTNOT ::"):].strip()
+            if any(pred(text) for pred in _LESSON_CORPUS_CLASSES.values()):
+                misses.append(f"line {lineno}: MUSTNOT fired: {text[:80]}")
+            continue
+        if line.startswith("MUST "):
+            cls, sep, text = line[len("MUST "):].partition(" :: ")
+            pred = _LESSON_CORPUS_CLASSES.get(cls.strip())
+            if not sep or pred is None:
+                misses.append(f"line {lineno}: malformed/unknown MUST line: {line[:60]}")
+            elif pred(text.strip()):
+                fired += 1
+            else:
+                misses.append(f"line {lineno}: MUST {cls.strip()} did not fire: {text.strip()[:80]}")
+            continue
+        misses.append(f"line {lineno}: unrecognized corpus line: {line[:60]}")
+    return fired, misses
+
+
 def _errored_tool_results(d):
     """Texts of the tool results in this record that the harness marked as errors. Two shapes: the
     real one (a `tool_result` block with is_error inside a `user` record's message.content) and a
@@ -1553,9 +1593,36 @@ def main(argv=None):
                    help=f"max chars --quote may emit (default {DEFAULT_QUOTE_BUDGET})")
     p.add_argument("--lessons", action="store_true",
                    help="mine deterministic lesson candidates from transcript (no LLM)")
+    p.add_argument("--self-test", action="store_true",
+                   help="run the planted lessons corpus through the classifier and exit non-zero "
+                        "if any class can no longer fire (a zero from a scanner that cannot fire "
+                        "is a broken instrument, not a finding)")
+    p.add_argument("--no-corpus-skip", action="store_true",
+                   help="with --self-test: a MISSING corpus is a failure instead of a loud skip")
     p.add_argument("--repos-only", action="store_true",
                    help="print one absolute repo path per line and exit 0 (for verify-state.py)")
     args = p.parse_args(argv)
+
+    if args.self_test:
+        corpus = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                              "tests", "fixtures", "lessons-corpus.txt")
+        if not os.path.exists(corpus):
+            if args.no_corpus_skip:
+                print("self-test FAILED: corpus missing", file=sys.stderr)
+                return 1
+            print(f"self-test: SKIPPED -- corpus not found at {corpus} "
+                  "(pass --no-corpus-skip to make a missing corpus a failure)")
+            return 0
+        fired, misses = _self_test_corpus(corpus)
+        if misses:
+            print(f"self-test FAILED: {len(misses)} miss(es), {fired} line(s) fired",
+                  file=sys.stderr)
+            for m in misses:
+                print(f"  {m}", file=sys.stderr)
+            return 1
+        print(f"self-test: ok -- {fired} corpus line(s) fired across "
+              f"{len(_LESSON_CORPUS_CLASSES)} classes")
+        return 0
 
     paths = find_transcripts(args)
     if not paths:

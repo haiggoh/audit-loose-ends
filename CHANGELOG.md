@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.13.1] — 2026-10-27 — the lessons scanner can prove it can fire
+
+### Added — audit-scan.py --self-test, and the zero-guard line in harvest-lessons
+
+The lessons classifier's zero is bounded by its vocabulary: the 2026-10-26 harvest runs found
+zero candidates in a transcript stretch that DID contain self-corrections, because they were
+executed as silent fixes matching no shape (observation 0050). Two changes:
+
+- `audit-scan.py --self-test` pushes `tests/fixtures/lessons-corpus.txt` (a must-fire /
+  must-not-fire corpus, planted positives for every class) through the same predicates the
+  scanner runs, and exits non-zero if any class can no longer fire — pinpointing the line.
+  A missing corpus is a loud SKIPPED, failing only under `--no-corpus-skip` (the
+  redact-secret.py convention). Mutation-checked: rotting one pattern's vocabulary turns
+  the self-test and the suite red.
+- `harvest-lessons` states the rule at the point of use: before reading "0 candidates" as
+  a finding, prove the scanner can fire.
+
 ## [0.13.0] — 2026-10-26 — the entry points resolve per call, so an update needs no re-wiring
 
 ### Added — shims, not symlinks, for the two scripts other plugins call

@@ -1,0 +1,20 @@
+#!audit-scan-lessons-corpus v1
+#
+# The lessons corpus for audit-scan.py --self-test. Each MUST line must fire its named
+# class through the SAME predicates the scanner runs; each MUSTNOT must fire nothing.
+# The magic first line declares this file test data, so the durable-write scanner
+# reports it as SKIPPED rather than auditing it -- visibly, never silently excluded.
+#
+# Why this exists (obs 0050): a deterministic scanner's zero is only a finding when the
+# scanner can be shown to fire. A class whose vocabulary rots must turn --self-test
+# non-zero, so "0 candidates" cannot masquerade as "no lessons happened".
+#
+# Format: "MUST <class> :: <text>" / "MUSTNOT :: <text>"; blank lines and # ignored.
+MUST correction :: no, that's wrong - the flag is --all, not --verbose
+MUST correction :: why did you write to the installed copy instead of the source repo
+MUST self-correction :: my assumption was wrong: the fixture already included the catch-all, so the assertion double-counted it
+MUST self-correction :: it turned out I misread the schema and the id had to be a string
+MUST schema-error :: expected string, got int
+MUST schema-error :: InputValidationError: expected array, provided null
+MUSTNOT :: ran the suite in parallel: 1043 passed, 113 skipped, budget reset at midnight
+MUSTNOT :: the marker file was refreshed and the digest matches the published manifest

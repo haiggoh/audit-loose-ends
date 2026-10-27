@@ -22,6 +22,12 @@ This emits a `LESSON CANDIDATES` section and a summary line:
 lessons: N candidates (c corrections, r retries, d decisions, s self-corrections, e schema-errors)
 ```
 
+**A zero is a claim the scanner must be able to fail first** (obs 0050). The classifier's zero
+is bounded by its vocabulary — before reading "0 candidates" as "no lessons happened", run
+`"$CLAUDE_PLUGIN_ROOT/scripts/audit-scan.py" --self-test`: it pushes a planted-positive corpus
+through the same predicates and exits non-zero if any class can no longer fire. A scanner
+that cannot fire certifies nothing.
+
 ### 2. For each candidate, fetch context with --quote (budgeted)
 
 The total cost is capped by `candidates × budget`, not by session length.

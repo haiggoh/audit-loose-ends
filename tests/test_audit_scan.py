@@ -1146,6 +1146,14 @@ _hd_both = render([rec_bash(f"python3 - <<'PY'\nopen('{MEM}/both2.md','w')\nPY")
 check(_hd_both.count(f"{MEM}/both2.md") == 1,
       "a heredoc write with a delta record is not double-reported")
 
+# --------------------------------------------------------------------------- self-test (obs 0050)
+
+r = subprocess.run([sys.executable, SCRIPT, "--self-test"],
+                   capture_output=True, text=True, timeout=120)
+eq(r.returncode, 0, "--self-test exits 0")
+check("self-test" in (r.stdout + r.stderr).lower(), "the self-test output names itself",
+      (r.stdout + r.stderr)[-300:])
+
 print()
 if _fail:
     print(f"FAILURES: {_fail}")
