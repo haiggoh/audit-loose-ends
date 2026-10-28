@@ -6,7 +6,8 @@
 
   "manifest": ".claude-plugin/plugin.json",
   "changelog": "CHANGELOG.md",
-  "test_cmd": "python3 tests/test_audit_scan.py && for t in tests/test_*.sh; do bash \"$t\" || exit 1; done",
+  "_comment_tests": "Suites run in parallel (GNU parallel, grouped output, exit = number of failed jobs): 10.9s serial -> 6.9s, same verdict (2026-10-28).",
+  "test_cmd": "{ echo 'python3 tests/test_audit_scan.py'; for t in tests/test_*.sh; do echo \"bash $t\"; done; } | parallel --will-cite -j 12",
 
 
 
