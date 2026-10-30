@@ -665,6 +665,66 @@ finally:
     import shutil; shutil.rmtree(_sess_tmp, ignore_errors=True)
 
 
+# --- the HEURISTIC fallback must not trust mtime alone -----------------------------------------
+# With no CLAUDE_CODE_SESSION_ID (or with --last N / --project), selection falls back to ranking
+# candidates. A resumed or rewritten transcript gets a fresh MTIME while its CONTENT stays old, and
+# a session that really is the latest can have the older mtime. The fixture gives the stale-content
+# file the NEWER mtime: a fixture where mtime and content agree would pass against the broken code.
+print("== selection by content timestamp, not mtime ==")
+_ct_tmp = tempfile.mkdtemp()
+_ct_proj = os.path.join(_ct_tmp, "-Users-someone")
+os.makedirs(_ct_proj)
+_stale = os.path.join(_ct_proj, "cccccccc-0000-0000-0000-000000000001.jsonl")
+_fresh = os.path.join(_ct_proj, "dddddddd-0000-0000-0000-000000000002.jsonl")
+_no_ts = os.path.join(_ct_proj, "eeeeeeee-0000-0000-0000-000000000003.jsonl")
+for _p, _ts in ((_stale, "2026-10-01T10:00:00.000Z"), (_fresh, "2026-10-29T10:00:00.000Z")):
+    with open(_p, "w") as fh:
+        fh.write(json.dumps({"type": "user", "timestamp": "2026-09-01T00:00:00.000Z",
+                             "message": {"role": "user", "content": "early"}}) + "\n")
+        fh.write(json.dumps({"type": "user", "timestamp": _ts,
+                             "message": {"role": "user", "content": "late"}}) + "\n")
+with open(_no_ts, "w") as fh:
+    fh.write(json.dumps({"type": "user", "message": {"role": "user", "content": "x"}}) + "\n")
+os.utime(_fresh, (1_600_000_000, 1_600_000_000))   # newest CONTENT, OLDEST mtime
+os.utime(_stale, (1_700_000_000, 1_700_000_000))   # oldest content, NEWEST mtime
+os.utime(_no_ts, (1_650_000_000, 1_650_000_000))
+
+check(A._last_content_ts(_fresh) > A._last_content_ts(_stale),
+      "the last content timestamp is read from the transcript tail")
+check(A._last_content_ts(_no_ts) is None,
+      "a transcript with no timestamp yields None, never a made-up value")
+
+_saved_projects, _saved_env = A.PROJECTS_DIR, os.environ.pop("CLAUDE_CODE_SESSION_ID", None)
+try:
+    A.PROJECTS_DIR = _ct_tmp
+    class _CtArgs:
+        file = None; project = None; all_projects = True; session = None
+        last = 1; since = None; exclude = []
+    import contextlib, io
+    _err = io.StringIO()
+    with contextlib.redirect_stderr(_err):
+        _picked = A.find_transcripts(_CtArgs())
+    check(_picked == [_fresh],
+          "--last 1 picks the newest by CONTENT timestamp, not the newest mtime",
+          f"picked={[os.path.basename(x) for x in _picked]}")
+    check("MTIME" in _err.getvalue() and os.path.basename(_stale)[:8] in _err.getvalue()
+          and os.path.basename(_fresh)[:8] in _err.getvalue(),
+          "the disagreement is announced on stderr, naming both sessions")
+
+    # Planted negative: when mtime and content agree there is nothing to warn about.
+    os.utime(_fresh, (1_800_000_000, 1_800_000_000))
+    _err = io.StringIO()
+    with contextlib.redirect_stderr(_err):
+        _picked = A.find_transcripts(_CtArgs())
+    check(_picked == [_fresh] and _err.getvalue() == "",
+          "no warning when mtime order and content order agree", _err.getvalue())
+finally:
+    A.PROJECTS_DIR = _saved_projects
+    if _saved_env is not None:
+        os.environ["CLAUDE_CODE_SESSION_ID"] = _saved_env
+    import shutil; shutil.rmtree(_ct_tmp, ignore_errors=True)
+
+
 # --------------------------------------------------------------------- removals, and ABSENCE
 # Two claims that used to render identically: "nothing changed" and "nothing I could recognise".
 # The second is a confession of blindness, and it used to read as a clean bill of health — measured

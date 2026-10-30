@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.13.2] — 2026-10-30 — audit-scan's fallback selection no longer trusts mtime alone
+
+- `audit-scan.py` ranks candidate transcripts by the newest record `timestamp` inside each file
+  (tail read, mtime only when a file has none) instead of by file mtime. A resumed or rewritten
+  transcript gets a fresh mtime with old content, so `--last N` could land on the wrong session.
+  When the mtime winner and the content winner differ, a WARNING naming both goes to stderr.
+- Unchanged: with `CLAUDE_CODE_SESSION_ID` set and plain `--last 1`, selection is still by identity.
+
 ## [0.13.1] — 2026-10-27 — the lessons scanner can prove it can fire
 
 ### Added — audit-scan.py --self-test, and the zero-guard line in harvest-lessons

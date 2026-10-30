@@ -630,12 +630,54 @@ def find_transcripts(args):
     if args.exclude:
         files = [f for f in files
                  if not any(os.path.basename(f).startswith(x) for x in args.exclude)]
-    files.sort(key=lambda f: os.path.getmtime(f), reverse=True)
+    by_mtime = sorted(files, key=os.path.getmtime, reverse=True)
+    files = sorted(files, key=_recency, reverse=True)
+    _warn_if_mtime_misleads(by_mtime, files)
     if args.since:
         files = [f for f in files if _mtime_date(f) >= args.since]
     if args.last and not args.session and not args.file:
         files = files[:args.last]
     return files
+
+
+def _last_content_ts(f, tail_bytes=65536):
+    """Epoch seconds of the newest record timestamp inside a transcript, or None.
+
+    Only the tail is read, so ranking a hundred transcripts stays cheap. mtime is NOT a
+    stand-in: a resumed or rewritten transcript gets a fresh mtime with old content."""
+    import datetime
+    try:
+        with open(f, "rb") as fh:
+            fh.seek(0, os.SEEK_END)
+            fh.seek(max(0, fh.tell() - tail_bytes))
+            tail = fh.read().decode("utf-8", errors="replace")
+    except OSError:
+        return None
+    best = None
+    for line in tail.splitlines():
+        try:
+            ts = json.loads(line).get("timestamp")
+            when = datetime.datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp()
+        except (ValueError, AttributeError, TypeError):
+            continue  # a cut first line, a non-object record, or no/odd timestamp
+        best = when if best is None else max(best, when)
+    return best
+
+
+def _recency(f):
+    """Sort key: content timestamp when the transcript has one, else its mtime."""
+    ts = _last_content_ts(f)
+    return ts if ts is not None else os.path.getmtime(f)
+
+
+def _warn_if_mtime_misleads(by_mtime, by_content):
+    """The heuristic fallback is only trustworthy while both orderings agree on the winner.
+    When they do not, say so where the reader will see it instead of silently picking one."""
+    if by_mtime and by_content and by_mtime[0] != by_content[0]:
+        print(f"audit-scan: WARNING newest by MTIME is {os.path.basename(by_mtime[0])[:8]} but "
+              f"newest by transcript CONTENT is {os.path.basename(by_content[0])[:8]} -- "
+              f"selecting by content. Confirm this is the session you mean, or pass an "
+              f"explicit path / --session.", file=sys.stderr)
 
 
 def _mtime_date(f):
@@ -1580,7 +1622,8 @@ def main(argv=None):
     p.add_argument("--all-projects", action="store_true")
     p.add_argument("--session", help="session id or its prefix")
     p.add_argument("--last", type=int, default=1, metavar="N",
-                   help="the N most recently modified transcripts (default 1)")
+                   help="the N most recent transcripts by newest record timestamp, mtime when "
+                        "a file has none (default 1); warns on stderr if mtime disagrees")
     p.add_argument("--since", metavar="YYYY-MM-DD", help="only transcripts modified on/after this")
     p.add_argument("--exclude", action="append", default=[], metavar="SESSION_ID",
                    help="skip a session id prefix — use it to exclude the CURRENT session, "
