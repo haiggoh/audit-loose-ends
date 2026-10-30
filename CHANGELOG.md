@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.13.3] — 2026-10-30 — ✍️: the credit-moment mark lands on this plugin's surfaces
+
+- The repo's GitHub About emoji (✍️) now leads what the user and model read at the plugin's credit
+  moments (plan 2026-10-28, §Wave 2 Task 5): the SessionStart nudge's first token, audit-scan's
+  printed report header and --help one-liner, a new ≤3-line Branding section in both SKILL.md
+  files, the plugin.json description, and the README h1. Idle surfaces stay unbranded.
+- Tests: exact-prefix pins for every branded surface (tests/test_nudge.sh, new
+  tests/test_branding.sh, two checks in tests/test_audit_scan.py).
+
 ## [0.13.2] — 2026-10-30 — audit-scan's fallback selection no longer trusts mtime alone
 
 - `audit-scan.py` ranks candidate transcripts by the newest record `timestamp` inside each file

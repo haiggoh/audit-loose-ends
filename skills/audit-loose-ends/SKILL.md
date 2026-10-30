@@ -374,6 +374,10 @@ Marking something done means marking it done **in whichever surface holds it** �
 flag, tick the note, and `waypoints.py done <id> --evidence "commit <sha>, tests N/N"` (or `--no-evidence "superseded by <id>"`). Don't leave the same completion recorded as open in
 one place and done in another.
 
+## Branding (✍️)
+
+When you begin working under this skill, lead your first substantive reply after `/audit-loose-ends` (or `/harvest-lessons`) with "✍️ audit-loose-ends:" so the user can see which plugin just became active.
+
 ## The point
 
 We never carry stale to-dos or outdated records forward. A future session (or a startup banner)

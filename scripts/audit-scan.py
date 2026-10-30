@@ -1041,7 +1041,7 @@ def report(scans, args):
     for s in scans:
         sid = ", ".join(sorted(s.session_ids)) or os.path.basename(s.path)[:8]
         out.append("=" * 72)
-        out.append(f"SESSION {sid}")
+        out.append(f"✍️ audit-scan: SESSION {sid}")
         out.append(f"  transcript  {s.path}")
         out.append(f"  span        {s.first_ts or '?'} → {s.last_ts or '?'}")
         out.append(f"  size        {s.bytes/1024:.0f} KB, {s.lines} records"
@@ -1614,7 +1614,7 @@ def lessons(paths):
 def main(argv=None):
     p = argparse.ArgumentParser(
         prog="audit-scan.py",
-        description="Extract audit-relevant facts from Claude Code transcripts without loading "
+        description="✍️ Extract audit-relevant facts from Claude Code transcripts without loading "
                     "them into context. Read-only.")
     p.add_argument("file", nargs="*", help="explicit transcript path(s); overrides selection")
     p.add_argument("--project", help="project dir under ~/.claude/projects (substring ok); "

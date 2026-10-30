@@ -20,7 +20,9 @@ check $? "emits valid SessionStart additionalContext JSON"
 case "$OUT" in *systemMessage*) check 1 "no systemMessage (model-only)";; *) check 0 "no systemMessage (model-only)";; esac
 
 # 3) key content present
-case "$CTX" in *"audit-loose-ends:"*) check 0 "labelled 'audit-loose-ends:'";; *) check 1 "labelled 'audit-loose-ends:'";; esac
+# The credit-moment mark (plan 2026-10-28): the nudge leads with the About-emoji — exact prefix,
+# not a substring assert (R2).
+case "$CTX" in "✍️ audit-loose-ends: when a substantive task ends"*) check 0 "leads with '✍️ audit-loose-ends:'";; *) check 1 "leads with '✍️ audit-loose-ends:'";; esac
 LC="$(printf '%s' "$CTX" | tr 'A-Z' 'a-z')"
 case "$LC" in *redundant*orphaned*) check 0 "names redundant/orphaned drift";; *) check 1 "names redundant/orphaned drift";; esac
 # The CLI is `waypoints.py` (note the .py) -- the bare name is a different, extensionless

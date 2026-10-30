@@ -1,4 +1,4 @@
-# audit-loose-ends
+# ✍️ audit-loose-ends
 
 A Claude Code plugin that reconciles your **durable records** at the end of a task or session, so
 nothing is left **redundant, orphaned, or falsely flagged as to-do when it's already done**. A

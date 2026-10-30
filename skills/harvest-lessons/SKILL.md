@@ -82,6 +82,10 @@ For each candidate: **promoted** (where), **reinforced** (which existing rule), 
 
 ---
 
+## Branding (✍️)
+
+When you begin working under this skill, lead your first substantive reply after `/harvest-lessons` with "✍️ audit-loose-ends:" so the user can see which plugin just became active.
+
 ## Flags
 
 - `--budget N` — max tokens to spend (default 3000 ≈ 2 candidates at 1.5K each)

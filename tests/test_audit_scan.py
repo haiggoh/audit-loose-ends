@@ -480,6 +480,15 @@ with tempfile.TemporaryDirectory() as td:
 
     r = subprocess.run([sys.executable, SCRIPT, tf], capture_output=True, text=True, timeout=60)
     check(r.returncode == 0, "exits 0 on a valid transcript", r.stderr[:300])
+    # Credit-moment mark (plan 2026-10-28): the printed report header leads with ✍️ audit-scan,
+    # and the --help one-liner carries it too. Reader-facing output; nothing parses it (R1).
+    _lines = r.stdout.splitlines()
+    check(len(_lines) > 1 and _lines[1].startswith("✍️ audit-scan: SESSION "),
+          "the report header leads with the ✍️ audit-scan mark",
+          _lines[1][:90] if len(_lines) > 1 else "(empty output)")
+    rh = subprocess.run([sys.executable, SCRIPT, "--help"], capture_output=True, text=True, timeout=60)
+    check("✍️ Extract audit-relevant facts" in rh.stdout,
+          "--help one-liner carries the ✍️ mark")
     check("waypoints.py done thing" in r.stdout, "the waypoints command reaches the digest")
     check("launchctl bootstrap" in r.stdout, "the automation command reaches the digest")
     check("memory" in r.stdout, "the memory surface is named")
