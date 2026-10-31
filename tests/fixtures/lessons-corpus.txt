@@ -18,3 +18,14 @@ MUST schema-error :: expected string, got int
 MUST schema-error :: InputValidationError: expected array, provided null
 MUSTNOT :: ran the suite in parallel: 1043 passed, 113 skipped, budget reset at midnight
 MUSTNOT :: the marker file was refreshed and the digest matches the published manifest
+#
+# 0.13.6 (obs 0083 / waypoint audit-loose-ends-sharpen): advice- and clarity-shaped user turns
+# carry the same correction signal as contradiction-shaped ones. Mid-turn messages arrive as
+# queue-operation records, not last-prompt records — see lessons-scenarios/.
+MUST correction :: we need to make sure the scripts don't error or fail when the waypoints store is missing
+MUST correction :: check-code should not rely on users knowing the verb lint in its description
+MUST correction :: neither session's work should be dismissed outright
+MUST correction :: the description should either not mention waypoints or add a caveat such as "(if installed)"
+MUST correction :: I'm sorry what exactly are we talking about here? please inform me
+MUSTNOT :: we should probably bump the version before writing the changelog entry
+MUSTNOT :: the harness re-records the latest prompt on many later lines

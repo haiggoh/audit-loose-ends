@@ -1,0 +1,2 @@
+#!lessons-scenario self-correction -- reversal AND owned failure in one assistant text
+{"type": "assistant", "timestamp": "2026-10-31T11:00:00Z", "sessionId": "scen", "message": {"content": [{"type": "text", "text": "My assumption was wrong: the fixture already included the catch-all, so the assertion double-counted it."}]}}

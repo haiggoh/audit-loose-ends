@@ -1,0 +1,8 @@
+#!lessons-scenario correction -- mid-turn messages arrive as queue-operation records (obs 0083)
+# Real enqueue records from session 717b9289 (2026-10-31); the "remove" twin carries the same
+# content and must NOT double-count. Expected: 4 correction candidates.
+{"type": "queue-operation", "operation": "enqueue", "timestamp": "2026-10-31T10:40:58.906Z", "sessionId": "717b9289", "content": "check-code should not rely on users knowing the verb lint in its description, it should describe it"}
+{"type": "queue-operation", "operation": "remove", "timestamp": "2026-10-31T10:40:59.515Z", "sessionId": "717b9289", "content": "check-code should not rely on users knowing the verb lint in its description, it should describe it", "reason": "absorbed_mid_turn"}
+{"type": "queue-operation", "operation": "enqueue", "timestamp": "2026-10-31T10:41:00.000Z", "sessionId": "717b9289", "content": "don't wait with the entire part B. check which repos the other session is planning to touch and which it has finished"}
+{"type": "queue-operation", "operation": "enqueue", "timestamp": "2026-10-31T10:41:30.000Z", "sessionId": "717b9289", "content": "okay but we need to make sure the scripts don't error or fail or stall when they can't find the waypoints store, the manifest declaration alone is not enough"}
+{"type": "queue-operation", "operation": "enqueue", "timestamp": "2026-10-31T10:42:00.000Z", "sessionId": "717b9289", "content": "neither session's work should be dismissed outright"}

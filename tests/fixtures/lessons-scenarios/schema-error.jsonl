@@ -1,0 +1,2 @@
+#!lessons-scenario schema-error -- only an ERRORED tool result whose text is a validation failure
+{"type": "tool_result", "timestamp": "2026-10-31T11:00:00Z", "sessionId": "scen", "tool": "AskUserQuestion", "isError": true, "error": "InputValidationError: Expected array, got str"}

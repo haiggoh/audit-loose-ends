@@ -26,7 +26,11 @@ lessons: N candidates (c corrections, r retries, d decisions, s self-corrections
 is bounded by its vocabulary — before reading "0 candidates" as "no lessons happened", run
 `"$CLAUDE_PLUGIN_ROOT/scripts/audit-scan.py" --self-test`: it pushes a planted-positive corpus
 through the same predicates and exits non-zero if any class can no longer fire. A scanner
-that cannot fire certifies nothing.
+that cannot fire certifies nothing. Since 0.13.6 (obs 0083) the corpus covers all five reported
+classes — text lines plus the record scenarios in `tests/fixtures/lessons-scenarios/`, run
+through the same extractor, including a mid-turn `queue-operation` example — and `--self-test`
+fails unless every one of them fires. In `--lessons` output, a zero in a class the corpus cannot
+fire prints UNKNOWN, not 0.
 
 ### 2. For each candidate, fetch context with --quote (budgeted)
 

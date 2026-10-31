@@ -1292,6 +1292,17 @@ _LESSON_SCHEMA_ERROR = re.compile(r"InputValidationError|\bExpected\s+\w+,\s+got
 
 # User prompt patterns that signal a correction/redirect
 _LESSON_USER_REDIRECT = re.compile(r"^(?:no|wait|actually|stop|that'?s\s+not|why\s+did|I\s+said|don'?t)\b", re.I)
+# 0.13.6 (obs 0083): corrections also arrive advice-shaped ("we need to make sure …",
+# "should not …", "neither … should …") or clarity-shaped ("what exactly are we talking about
+# here?") — a normal user turn with no contradiction word in it. Measured on session 717b9289:
+# 4 of its 6 corrections were advice-shaped, one a bare clarity question, and all four sat in
+# queue-operation records (see _record_user_text).
+_LESSON_ADVICE = re.compile(r"\b(?:should\s+not|should\s+either|make\s+sure|we\s+need\s+to|"
+                            r"follow\s+up\s+with|does\s+nothing\s+to)\b"
+                            r"|\bneither\b[^.\n]{0,80}?\b(?:should|must)\b", re.I)
+_LESSON_CLARITY = re.compile(r"\b(?:i'?m\s+sorry|what\s+exactly|what\s+do\s+you\s+mean|"
+                             r"please\s+(?:inform|explain|clarify|elaborate)|i'?m\s+confused|"
+                             r"not\s+sure\s+what\s+you\s+mean)\b", re.I)
 
 # Decision signals: AskUserQuestion answers
 _LESSON_DECISION_KEYS = ("AskUserQuestion", "user_choice", "answers")
@@ -1305,7 +1316,10 @@ def _is_correction_prompt(text):
     if _LESSON_USER_REDIRECT.search(text):
         return True
     # Check for correction keywords anywhere
-    return bool(_LESSON_CORRECTION.search(text))
+    if _LESSON_CORRECTION.search(text):
+        return True
+    # 0.13.6 (obs 0083): advice- and clarity-shaped turns carry the same signal
+    return bool(_LESSON_ADVICE.search(text) or _LESSON_CLARITY.search(text))
 
 def _is_self_correction(text):
     """Check if assistant text contains a self-correction signal: a reversal AND an owned
@@ -1324,13 +1338,24 @@ _LESSON_CORPUS_CLASSES = {
     "self-correction": _is_self_correction,
     "schema-error": _is_schema_error,
 }
+# Every class --lessons reports (0.13.6). The two structural classes have no single-text
+# predicate, so the self-test fires them through planted record scenarios in
+# tests/fixtures/lessons-scenarios/<class>[--<slug>].jsonl, run through the SAME extractor.
+_LESSON_ALL_CLASSES = ("correction", "retry-after-fail", "decision", "self-correction", "schema-error")
+
+
+def _fixture_dir():
+    return os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                        "tests", "fixtures")
 
 
 def _self_test_corpus(corpus_path):
-    """Run the planted lessons corpus through the SAME predicates the scanner runs.
-    Returns (fired, misses): a MUST line whose class does not fire, a MUSTNOT line that
-    fires, and malformed lines are all misses."""
+    """Run the planted lessons corpus through the SAME predicates the scanner runs, and each
+    scenario file through the SAME extractor. Returns (fired, misses, fired_classes): a MUST
+    line whose class does not fire, a MUSTNOT line that fires, a scenario whose class does not
+    come out of _extract_lesson_candidates, and malformed lines are all misses."""
     misses, fired = [], 0
+    fired_classes = set()
     with open(corpus_path, encoding="utf-8", errors="replace") as fh:
         lines = fh.read().splitlines()
     for lineno, raw in enumerate(lines, 1):
@@ -1349,11 +1374,40 @@ def _self_test_corpus(corpus_path):
                 misses.append(f"line {lineno}: malformed/unknown MUST line: {line[:60]}")
             elif pred(text.strip()):
                 fired += 1
+                fired_classes.add(cls.strip())
             else:
                 misses.append(f"line {lineno}: MUST {cls.strip()} did not fire: {text.strip()[:80]}")
             continue
         misses.append(f"line {lineno}: unrecognized corpus line: {line[:60]}")
-    return fired, misses
+    scen_dir = os.path.join(os.path.dirname(corpus_path), "lessons-scenarios")
+    if os.path.isdir(scen_dir):
+        for fn in sorted(os.listdir(scen_dir)):
+            if not fn.endswith(".jsonl"):
+                continue
+            cls = fn[:-len(".jsonl")].split("--")[0]
+            if cls not in _LESSON_ALL_CLASSES:
+                misses.append(f"scenario {fn}: unknown class {cls!r} (want one of {_LESSON_ALL_CLASSES})")
+                continue
+            scan = Scan(os.path.join(scen_dir, fn)).run()
+            got = {c["type"] for c in _extract_lesson_candidates(scan)}
+            if cls in got:
+                fired += 1
+                fired_classes.add(cls)
+            else:
+                misses.append(f"scenario {fn}: no {cls} candidate came out of the extractor")
+    return fired, misses, fired_classes
+
+
+def _self_test_certified_classes():
+    """The classes the planted corpus can fire RIGHT NOW — the only classes whose zero in
+    --lessons is a real zero; any other zero prints UNKNOWN (obs 0050/0083: a zero from a
+    scanner that cannot fire is a broken instrument, not a finding). A missing corpus or
+    scenarios dir certifies nothing."""
+    corpus = os.path.join(_fixture_dir(), "lessons-corpus.txt")
+    if not os.path.exists(corpus):
+        return set()
+    _, _, fired_classes = _self_test_corpus(corpus)
+    return fired_classes
 
 
 def _errored_tool_results(d):
@@ -1373,6 +1427,35 @@ def _errored_tool_results(d):
                     c = " ".join(str(x.get("text") or "") for x in c if isinstance(x, dict))
                 out.append(str(c or ""))
     return out
+
+def _record_user_text(d):
+    """The human-typed text a record carries, "" for everything else. Three shapes hold it:
+    a `last-prompt` record's `lastPrompt` (the harness re-records the latest prompt on many
+    later lines), a raw `user` record's TEXT blocks only — its tool_result blocks are the
+    harness talking, not the human — and a mid-turn `queue-operation` ENQUEUE's `content`.
+    0.13.6 (obs 0083): 4 of the 6 corrections in session 717b9289 lived ONLY in queue-operation
+    records, so a pool that reads last-prompt alone never sees them. The queue-operation
+    `remove` twin carries the same content and is not read at all (dedup would catch it, but
+    not reading it is cheaper than deduping it)."""
+    t = d.get("type")
+    if t == "last-prompt":
+        p = d.get("lastPrompt")
+        return p if isinstance(p, str) else ""
+    if t == "queue-operation":
+        if d.get("operation") != "enqueue":
+            return ""
+        c = d.get("content")
+        return c if isinstance(c, str) else ""
+    if t == "user":
+        msg = d.get("message") or {}
+        cont = msg.get("content") if isinstance(msg, dict) else None
+        if isinstance(cont, str):
+            return cont
+        if isinstance(cont, list):
+            return "\n".join(str(b.get("text") or "") for b in cont
+                             if isinstance(b, dict) and b.get("type") == "text")
+    return ""
+
 
 def _extract_lesson_candidates(scan):
     """Extract deterministic lesson candidates from a scan.
@@ -1403,18 +1486,26 @@ def _extract_lesson_candidates(scan):
 
         rec_type = d.get("type")
 
-        # 1. User prompt corrections (type: "last-prompt")
-        if rec_type == "last-prompt" and d.get("lastPrompt"):
-            prompt = d["lastPrompt"]
-            if isinstance(prompt, str) and prompt not in seen_prompts and _is_correction_prompt(prompt):
-                seen_prompts.add(prompt)
-                excerpt = prompt[:160].replace("\n", " ⏎ ")
-                candidates.append({
-                    "type": "correction",
-                    "line": line_num,
-                    "excerpt": excerpt,
-                    "category": "user-redirect"
-                })
+        # 1. User-typed corrections — last-prompt re-records, raw user records, and mid-turn
+        #    queue-operation enqueues all enter ONE pool (0.13.6, obs 0083). Dedupe key is the
+        #    whitespace-collapsed 160-char prefix (the excerpt length): the harness truncates a
+        #    re-recorded lastPrompt to ~200 chars with an ellipsis, so whole-text or
+        #    MAX_PROMPT-prefix keys never match the raw user record and one message counts
+        #    twice. Classification reads MAX_PROMPT chars — pasted documents (a whole SKILL.md
+        #    as a user text block) fire deep past that span, real corrections live within it.
+        prompt = _record_user_text(d)
+        if prompt:
+            key = " ".join(prompt[:160].split())
+            if key not in seen_prompts:
+                seen_prompts.add(key)
+                if _is_correction_prompt(prompt[:MAX_PROMPT]):
+                    excerpt = prompt[:160].replace("\n", " ⏎ ")
+                    candidates.append({
+                        "type": "correction",
+                        "line": line_num,
+                        "excerpt": excerpt,
+                        "category": "user-redirect"
+                    })
 
         # 2. Self-corrections in assistant text
         if rec_type == "assistant":
@@ -1579,13 +1670,24 @@ def lessons(paths):
     c_schema = counts.get("schema-error", 0)
     total = len(all_candidates)
 
+    # 0.13.6 (obs 0083/0050): a class zero is only a finding when the self-test corpus can
+    # fire that class — otherwise the honest answer is UNKNOWN, not 0.
+    certified = _self_test_certified_classes()
+    def cfmt(cls, n):
+        return str(n) if (n > 0 or cls in certified) else "UNKNOWN"
+
     print(f"LESSON CANDIDATES ({total})")
     if total == 0:
-        print("  (none)")
+        zeros = ", ".join(f"{label}={cfmt(cls, 0)}" for cls, label in (
+            ("correction", "corrections"), ("retry-after-fail", "retries"),
+            ("decision", "decisions"), ("self-correction", "self-corrections"),
+            ("schema-error", "schema-errors")))
+        print(f"  (none) — per-class zeros: {zeros}"
+              + ("" if certified else "  [no self-test corpus: every zero is UNKNOWN]"))
         return 0
 
     # Summary line the main skill reads
-    print(f"lessons: {total} candidates ({c_corr} corrections, {c_retry} retries, {c_dec} decisions, {c_self} self-corrections, {c_schema} schema-errors)")
+    print(f"lessons: {total} candidates ({cfmt('correction', c_corr)} corrections, {cfmt('retry-after-fail', c_retry)} retries, {cfmt('decision', c_dec)} decisions, {cfmt('self-correction', c_self)} self-corrections, {cfmt('schema-error', c_schema)} schema-errors)")
 
     # Group by type for display
     by_type = collections.defaultdict(list)
@@ -1603,7 +1705,7 @@ def lessons(paths):
 
     # Final line for the main skill
     if total > 0:
-        print(f"\n{total} lesson candidates found ({c_corr} corrections, {c_retry} retries, {c_dec} decisions, {c_self} self-corrections) — run harvest-lessons? (~{total * 1.5:.0f}K budgeted)")
+        print(f"\n{total} lesson candidates found ({cfmt('correction', c_corr)} corrections, {cfmt('retry-after-fail', c_retry)} retries, {cfmt('decision', c_dec)} decisions, {cfmt('self-correction', c_self)} self-corrections) — run harvest-lessons? (~{total * 1.5:.0f}K budgeted)")
 
     return 0
 
@@ -1635,11 +1737,14 @@ def main(argv=None):
     p.add_argument("--budget", type=int, default=DEFAULT_QUOTE_BUDGET,
                    help=f"max chars --quote may emit (default {DEFAULT_QUOTE_BUDGET})")
     p.add_argument("--lessons", action="store_true",
-                   help="mine deterministic lesson candidates from transcript (no LLM)")
+                   help="mine deterministic lesson candidates from transcript (no LLM); user turns "
+                        "are read from last-prompt, user AND mid-turn queue-operation records, and "
+                        "a zero in a class the self-test corpus cannot fire prints UNKNOWN, not 0")
     p.add_argument("--self-test", action="store_true",
-                   help="run the planted lessons corpus through the classifier and exit non-zero "
-                        "if any class can no longer fire (a zero from a scanner that cannot fire "
-                        "is a broken instrument, not a finding)")
+                   help="run the planted lessons corpus (text lines + lessons-scenarios/*.jsonl) "
+                        "through the classifier and exit non-zero unless ALL reported classes fire "
+                        "(a zero from a scanner that cannot fire is a broken instrument, not a "
+                        "finding)")
     p.add_argument("--no-corpus-skip", action="store_true",
                    help="with --self-test: a MISSING corpus is a failure instead of a loud skip")
     p.add_argument("--repos-only", action="store_true",
@@ -1656,15 +1761,21 @@ def main(argv=None):
             print(f"self-test: SKIPPED -- corpus not found at {corpus} "
                   "(pass --no-corpus-skip to make a missing corpus a failure)")
             return 0
-        fired, misses = _self_test_corpus(corpus)
+        fired, misses, fired_classes = _self_test_corpus(corpus)
+        # 0.13.6: the corpus must fire EVERY reported class (text lines plus the scenario
+        # files) — a class it cannot fire makes --lessons print UNKNOWN instead of a zero,
+        # and that is exactly the gap that hid 4 of 6 corrections in session 717b9289.
+        for cls in _LESSON_ALL_CLASSES:
+            if cls not in fired_classes:
+                misses.append(f"class {cls!r} never fired — no corpus line or scenario covers it")
         if misses:
-            print(f"self-test FAILED: {len(misses)} miss(es), {fired} line(s) fired",
+            print(f"self-test FAILED: {len(misses)} miss(es), {fired} line(s)/scenario(s) fired",
                   file=sys.stderr)
             for m in misses:
                 print(f"  {m}", file=sys.stderr)
             return 1
-        print(f"self-test: ok -- {fired} corpus line(s) fired across "
-              f"{len(_LESSON_CORPUS_CLASSES)} classes")
+        print(f"self-test: ok -- {fired} corpus line(s)/scenario(s) fired across "
+              f"{len(fired_classes)} classes ({', '.join(sorted(fired_classes))})")
         return 0
 
     paths = find_transcripts(args)

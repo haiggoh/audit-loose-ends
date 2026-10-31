@@ -53,7 +53,7 @@ memory files through heredocs showed one, and a short list read as *"nothing cha
 *"nothing changed through a tool I parse"*. That inverts the tool's premise, and it bites hardest in
 auto-mode sessions, which are instructed to prefer `sed`/heredoc over the Edit tool.
 
-**Lesson candidates.** The scanner prints a `lessons: N candidates (c corrections, r retries, d decisions, s self-corrections)` summary line. If N>0, one line at end of pass: "N lesson candidates found (c corrections, r retries, d decisions, s self-corrections) — run harvest-lessons? (~N×1.5K budgeted)". Otherwise say nothing. The harvest-lessons sub-skill is opt-in and budgeted.
+**Lesson candidates.** The scanner prints a `lessons: N candidates (c corrections, r retries, d decisions, s self-corrections)` summary line. If N>0, one line at end of pass: "N lesson candidates found (c corrections, r retries, d decisions, s self-corrections) — run harvest-lessons? (~N×1.5K budgeted)". Otherwise say nothing. The harvest-lessons sub-skill is opt-in and budgeted. Since 0.13.6 user turns are read from `last-prompt`, raw `user`, and mid-turn `queue-operation` records alike, and a zero in a class the self-test corpus cannot fire prints UNKNOWN, not 0.
 
 **Heredoc bodies, and what is still blind.** Since 0.11.0 a write CALL inside an interpreter
 heredoc (`python3 - <<'PY'` whose body does `open(p,'w')`, `Path(...).write_text`, `os.replace`) is

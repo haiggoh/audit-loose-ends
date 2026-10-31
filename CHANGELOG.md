@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.13.6] — 2026-10-31 — the lessons classifier reads mid-turn messages and certifies its zeros
+
+- **Fixed:** `audit-scan.py --lessons` printed 0 candidates for session 717b9289, which held 6 user
+  corrections (obs 0083, waypoint audit-loose-ends-sharpen). Three causes, all fixed:
+  (1) **records never entered the pool** — mid-turn messages arrive as `queue-operation` enqueue
+  records, so user-typed text is now read from `last-prompt`, raw `user` records (text blocks
+  only, never their tool results), and `queue-operation` enqueues alike; the remove twin is not
+  read. Dedupe is on the whitespace-collapsed 160-char prefix because the harness truncates a
+  re-recorded lastPrompt to ~200 chars with an ellipsis, so whole-text keys double-count one
+  message.
+  (2) **vocabulary** — only contradiction-shaped turns matched; advice-shaped ("we need to make
+  sure …", "should not …", "neither … should …") and clarity-shaped ("what exactly are we talking
+  about here?") turns now count too. Classification reads the first 400 chars only, so a pasted
+  document (a whole SKILL.md as a user text block) no longer fires deep inside itself.
+  (3) **the zero was not certified** — `--self-test` fired only 3 of the 5 reported classes. The
+  corpus now covers all five: text lines plus record scenarios in
+  `tests/fixtures/lessons-scenarios/*.jsonl` run through the SAME extractor (including a
+  queue-operation mid-turn scenario planted from the real session). `--self-test` exits non-zero
+  unless every reported class fires, and `--lessons` prints UNKNOWN instead of 0 for any class
+  the corpus cannot fire.
+- Measured acceptance: `--lessons` on 717b9289 went 0 → 12 candidates, including the 4 queued
+  mid-turn corrections; mutation check — disabling the queue-operation read turns `--self-test`
+  red on the scenario. Tests: fixture records + a corpus-less-copy UNKNOWN e2e in
+  `tests/test_audit_scan.py`; full suite green (parallel, per rtc-ship.json).
+
 ## [0.13.5] — 2026-10-31
 
 ### Changed

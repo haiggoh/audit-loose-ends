@@ -13,6 +13,7 @@ shown to fire is indistinguishable from one that is broken.
 import importlib.util
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -1058,6 +1059,35 @@ lesson_transcript.append({"type": "user", "timestamp": "2026-09-07T10:00:14Z", "
 for i in range(3):
     lesson_transcript.append({"type": "last-prompt", "timestamp": f"2026-09-07T10:00:2{i}Z",
                               "sessionId": "test-sess", "lastPrompt": "DUP-PROMPT actually, try a middle road"})
+# 10. 0.13.6 (obs 0083): a mid-turn queue-operation ENQUEUE is a user turn; its remove twin
+#     carries the same content and must NOT double-count.
+lesson_transcript.append({"type": "queue-operation", "operation": "enqueue",
+    "timestamp": "2026-09-07T10:01:00Z", "sessionId": "test-sess",
+    "content": "QOP-ADVICE check-code should not rely on users knowing the verb lint in its description"})
+lesson_transcript.append({"type": "queue-operation", "operation": "remove",
+    "timestamp": "2026-09-07T10:01:01Z", "sessionId": "test-sess",
+    "content": "QOP-ADVICE check-code should not rely on users knowing the verb lint in its description",
+    "reason": "absorbed_mid_turn"})
+# 11. 0.13.6: a raw user record AND its truncated last-prompt twin are ONE correction — the
+#     harness re-records lastPrompt cut to ~200 chars with an ellipsis, so the dedupe key is
+#     the 160-char prefix, not the whole text.
+_user_clarity = ("USER-CLARITY I'm sorry what exactly are we talking about here? please inform me. "
+                 "this padding pushes the message past the harness's re-recorded truncation point, "
+                 "so the twin below really is a prefix of this text and not a separate message")
+lesson_transcript.append({"type": "user", "timestamp": "2026-09-07T10:01:02Z", "sessionId": "test-sess",
+    "message": {"role": "user", "content": _user_clarity}})
+lesson_transcript.append({"type": "last-prompt", "timestamp": "2026-09-07T10:01:03Z",
+    "sessionId": "test-sess", "lastPrompt": _user_clarity[:200] + "…"})
+
+# unit: the pool reads exactly three record shapes, and only the text blocks of a user record
+eq(A._record_user_text({"type": "queue-operation", "operation": "enqueue", "content": "x"}), "x",
+   "_record_user_text reads a queue-operation enqueue")
+eq(A._record_user_text({"type": "queue-operation", "operation": "remove", "content": "x"}), "",
+   "_record_user_text ignores the queue-operation remove twin")
+eq(A._record_user_text({"type": "user", "message": {"content": [
+    {"type": "tool_result", "is_error": True, "content": "boom"},
+    {"type": "text", "text": "hello"}]}}), "hello",
+   "_record_user_text reads only the text blocks of a user record, not its tool results")
 
 r = run_midx(["--dir", "/nonexistent"])  # Just to have MIDX defined, not actually used
 MIDX = os.path.join(HERE, "..", "scripts", "audit-scan.py")
@@ -1090,6 +1120,10 @@ try:
         check(neg not in r.stdout, f"{neg}: a mere mention of 'schema' is not a schema-error")
     eq(r.stdout.count("DUP-PROMPT"), 1, "a prompt re-recorded 3x is listed once")
     check("2 schema-errors" in r.stdout, "exactly the 2 genuine schema errors are counted")
+    check("QOP-ADVICE" in r.stdout, "0.13.6: a mid-turn queue-operation enqueue is read as a user turn")
+    eq(r.stdout.count("QOP-ADVICE"), 1, "0.13.6: the queue-operation remove twin does not double-count")
+    eq(r.stdout.count("USER-CLARITY"), 1, "0.13.6: a user record and its truncated last-prompt twin count once")
+    check("4 corrections" in r.stdout, "0.13.6: 4 corrections (2 last-prompt + 1 queue-op + 1 user)")
 finally:
     os.unlink(lesson_path)
 
@@ -1222,6 +1256,34 @@ r = subprocess.run([sys.executable, SCRIPT, "--self-test"],
 eq(r.returncode, 0, "--self-test exits 0")
 check("self-test" in (r.stdout + r.stderr).lower(), "the self-test output names itself",
       (r.stdout + r.stderr)[-300:])
+# 0.13.6 (obs 0083): the corpus must fire ALL FIVE reported classes — text lines plus the
+# lessons-scenarios/*.jsonl record scenarios — or a zero in an uncovered class would print
+# as a real 0 in --lessons.
+check("5 classes" in (r.stdout + r.stderr), "--self-test fires across all 5 reported classes",
+      (r.stdout + r.stderr)[-300:])
+for cls in ("correction", "retry-after-fail", "decision", "self-correction", "schema-error"):
+    check(cls in (r.stdout + r.stderr), f"--self-test names the certified {cls} class",
+          (r.stdout + r.stderr)[-300:])
+
+# --------------------------------------------------------------------------- 0.13.6 UNKNOWN zeros (obs 0083/0050)
+print("== 0.13.6: a zero in a class the self-test corpus cannot fire prints UNKNOWN, not 0 ==")
+with tempfile.TemporaryDirectory() as td:
+    bare = os.path.join(td, "scripts", "audit-scan.py")   # no tests/fixtures beside it
+    os.makedirs(os.path.dirname(bare))
+    shutil.copy(SCRIPT, bare)
+    mini = os.path.join(td, "mini.jsonl")
+    with open(mini, "w", encoding="utf-8") as fh:
+        fh.write(json.dumps({"type": "last-prompt", "timestamp": "2026-09-07T12:00:00Z",
+                             "sessionId": "s",
+                             "lastPrompt": "no, that is wrong, use the other flag"}) + "\n")
+    r = subprocess.run([sys.executable, bare, mini, "--lessons"],
+                       capture_output=True, text=True, timeout=30)
+    eq(r.returncode, 0, "a corpus-less copy of the scanner still runs --lessons")
+    check("UNKNOWN retries" in r.stdout and "UNKNOWN schema-errors" in r.stdout,
+          "with no corpus beside it, zero classes print UNKNOWN", r.stdout[-300:])
+    r = run_audit([mini, "--lessons"])
+    check("0 retries" in r.stdout and "UNKNOWN" not in r.stdout,
+          "with the corpus present the same zeros are certified real zeros", r.stdout[-300:])
 
 print()
 if _fail:
