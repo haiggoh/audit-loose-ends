@@ -1,384 +1,141 @@
 ---
 name: audit-loose-ends
-description: Use to reconcile durable records at the end of a task or session so nothing is left stale — invoke when the user signals a wrap-up ("wrap up", "audit", "tidy up", "let's close out"), or whenever a session has created or changed durable records (memories, project notes, reminders/crons, the task list, or the waypoints store) and you're about to stop. Scans those surfaces for anything redundant, orphaned, or falsely still-flagged as to-do when it's actually done, and fixes it.
+description: Use to reconcile durable records at the end of a task or session so nothing is left stale — invoke when the user signals a wrap-up ("wrap up", "audit", "tidy up", "close out"), or whenever a session has created or changed durable records (memories, project notes, reminders/crons, the task list, or the waypoints store) and you're about to stop. Scans those surfaces for anything redundant, orphaned, or falsely still-flagged as to-do when it's actually done, and fixes it.
 ---
 
 # audit — reconcile durable records so nothing goes stale
 
-The complement to storing progress: after work happens, the *records* of it drift — a finished task
-still flagged "pending" in a memory, a note describing a plan that shipped, a follow-up nobody
-tracked. Left alone, a future session re-surfaces settled ground as if it were open. This skill is
-the recurring **end-of-task reconciliation** that keeps records honest.
-
-(Distinct from **no-hidden-changes**, whose reconciliation is a *one-time, first-run* pass checking
-whether a *rule* contradicts your setup. This one is *recurring* and reconciles *records*.)
+The recurring **end-of-task reconciliation** that keeps records honest: after work happens, its
+*records* drift — a finished task still flagged "pending", a note describing a shipped plan, a
+follow-up nobody tracked. (Distinct from **no-hidden-changes**, a one-time first-run rule audit.)
 
 ## When it applies
 
-Trigger when **either**:
-- the user signals a wrap-up — "wrap up", "audit", "tidy up", "close out" — **or**
-- this session **created or changed durable records** (memories, project notes, reminders/crons, the
-  task list, or the waypoints store), especially work that **completed** something a record still
-  flags as pending.
+Trigger when **either**: the user signals a wrap-up ("wrap up", "audit", "tidy up", "close out"),
+**or** this session created/changed durable records (memories, project notes, reminders, task list,
+waypoints store) — especially work that completed something a record still flags as pending.
+NOT length-based; tie-breaker: *"did this change persistent state or finish something a record
+calls open?"*
 
-It is **NOT length-based**: a long but read-only/exploratory/record-free task needs no audit
-(nothing can have gone stale); a short task that just closed a tracked to-do does. Tie-breaker:
-*"did this change persistent state or finish something a record calls open?"*
-
-## Step 0: scan the transcript instead of resuming the session
-
-Before anything else, establish **what the session actually changed** — from the transcript, not
-from recollection:
+## Step 0: scan the transcript, don't resume the session
 
 ```sh
 "$CLAUDE_PLUGIN_ROOT/scripts/audit-scan.py"                        # THIS session (self-identifying)
-"$CLAUDE_PLUGIN_ROOT/scripts/audit-scan.py" --exclude "$CUR" --last 3   # skip the live one
+"$CLAUDE_PLUGIN_ROOT/scripts/audit-scan.py" --exclude "$CUR" --last 3
 "$CLAUDE_PLUGIN_ROOT/scripts/audit-scan.py" --all-projects --since 2026-09-01
 ```
 
-It streams the raw JSONL from outside and prints a few KB: the durable records modified grouped by
-surface, the waypoints commands run, commits/pushes/tags/releases by repo and subject, automation
-that was actually *changed* as opposed to merely inspected, the task list's end state, and a GAPS
-section naming what it cannot know.
+It streams the raw JSONL from outside and prints a few KB: durable records modified grouped by
+surface, waypoints commands run, commits/tags/releases by repo, automation actually *changed*, and a
+GAPS section. **It tells you WHERE, never WHETHER** — it reports which files changed, never whether
+the change is correct. It is not a substitute for the surface checks: Steps 1–8 are still the looking.
 
-**It tells you WHERE, never WHETHER.** The scanner reports which files changed; it cannot judge
-whether the change was correct or whether an index entry is missing. That judgment is Steps 1–6.
+Read `DURABLE RECORDS MODIFIED` (backed by a change record) with more confidence than
+`DURABLE RECORDS WRITTEN BY A SHELL COMMAND` (inferred from a `>`/heredoc/`sed -i`/`tee` command —
+the command may have failed or only named the path; confirm those before acting on them).
 
-**Two sections, two confidence levels — read them differently.** `DURABLE RECORDS MODIFIED` is backed
-by a change record. `DURABLE RECORDS WRITTEN BY A SHELL COMMAND` is inferred from a path appearing in
-a `>`/heredoc/`sed -i`/`tee` command, which is weaker: the command may have failed, been a dry run, or
-named the path only in passing. Confirm those before acting on them. They are reported because the
-alternative was worse — before 0.5.6 they were reported **not at all**, so a session that edited three
-memory files through heredocs showed one, and a short list read as *"nothing changed"* when it meant
-*"nothing changed through a tool I parse"*. That inverts the tool's premise, and it bites hardest in
-auto-mode sessions, which are instructed to prefer `sed`/heredoc over the Edit tool.
+**Lesson candidates.** The scanner prints a `lessons: N candidates (…)` summary line; if N>0, offer
+harvest-lessons once (~N×1.5K budgeted). Since 0.13.6 user turns are read from `last-prompt`, raw
+`user`, and mid-turn `queue-operation` records alike, and a zero in a class the self-test corpus
+cannot fire prints UNKNOWN, not 0. `--self-test` must fire all five reported classes.
 
-**Lesson candidates.** The scanner prints a `lessons: N candidates (c corrections, r retries, d decisions, s self-corrections)` summary line. If N>0, one line at end of pass: "N lesson candidates found (c corrections, r retries, d decisions, s self-corrections) — run harvest-lessons? (~N×1.5K budgeted)". Otherwise say nothing. The harvest-lessons sub-skill is opt-in and budgeted. Since 0.13.6 user turns are read from `last-prompt`, raw `user`, and mid-turn `queue-operation` records alike, and a zero in a class the self-test corpus cannot fire prints UNKNOWN, not 0.
+**Heredoc bodies.** Since 0.11.0 a write CALL inside an interpreter heredoc is listed, tagged
+*(inside a heredoc body)*; a path merely NAMED in the body is not. Still blind: a script written to
+a file and run later, a runtime-computed target, non-Python bodies — cross-check with `ls -lt` over
+the records dir, bounded by the printed session span.
 
-**Heredoc bodies, and what is still blind.** Since 0.11.0 a write CALL inside an interpreter
-heredoc (`python3 - <<'PY'` whose body does `open(p,'w')`, `Path(...).write_text`, `os.replace`) is
-listed in the shell section, tagged *(inside a heredoc body)* — a path merely NAMED in the body is not.
-Still undetected: a script written to a file and run later (`cat > /tmp/patch.py <<'PY'` then
-`python3 /tmp/patch.py`), a target computed at runtime, and non-Python bodies beyond the plain `open`
-shapes. So `ls -lt` over the records dir, bounded by the printed session span, remains the
-cross-check for a session that scripted its edits. One command, and
-it is what caught the original under-report. Read-only, and it reports its own compression so the saving is
-measured rather than claimed (~600× on a 4.8 MB transcript).
+Run the scan on an ordinary wrap too: after a compaction your record of the early session is gone
+while the transcript's is not. Audit a big session from a FRESH session reading the digest — treat a
+digest-vs-memory disagreement as the digest being right about *what happened* and you being right
+about *what it meant*.
 
-**Why this is step zero: it makes auditing a long session affordable.** The alternative is resuming
-it, and a 300k-token session costs several dollars to reload for a job whose output is a handful of
-edits — the reconciliation ends up costing more than the work it reconciles. So audit a big session
-the way `resume-interrupted` recovers one: from a **fresh** session, reading a digest. Nothing from
-the old session enters context except the digest.
-
-When the digest raises a question, do **not** reach for the whole transcript. Quote just the thread:
+When the digest raises a question, quote just the thread:
 
 ```sh
 "$CLAUDE_PLUGIN_ROOT/scripts/audit-scan.py" --quote 'waypoints.*done' --budget 3000
 ```
 
-`--quote` prints matching records with line addresses and a hard character budget, so a follow-up
-costs what that one thread costs. Paying per-question is the whole economy of this approach; loading
-the session to answer one is what it exists to avoid. If you genuinely need the full chronology
-(reconstructing *reasoning*, not *changes*), that is what `cc-transcript` is for — a different tool
-for a different question, and a much larger artifact.
-
-### Yes, use it for an ordinary wrap too
-
-Not only for the expensive case. In a normal same-session wrap the scan is still worth running,
-because your recollection is the weakest part of the pass:
-
-- **After a compaction, your own record of the early session is gone** — the transcript's is not.
-  Anything you changed before the compaction is exactly what you will fail to reconcile, and it is
-  precisely what the scan still sees.
-- Recall is lossy in the specific direction that matters: it favours what you did *recently* and
-  what you found *interesting*, while the audit needs what you *touched*. A file edited once, early,
-  in passing, is both the easiest to forget and the most likely to be left stale.
-- It is cheap enough that the threshold should be low — a fraction of a second, a few KB.
-
-So the honest rule is: run it unless the session is short enough that you can name every file you
-changed. Treat a disagreement between the digest and your memory as the digest being right about
-*what happened* and you being right about *what it meant*.
-
-**Do not treat it as a substitute for the surface checks below.** It says a memory file changed,
-never whether the change is correct or whether an index entry is missing; it reports a commit, never
-whether the tree is clean now. It tells you where to look. Steps 1–6 are still the looking.
+For full chronology (reconstructing *reasoning*, not *changes*) use `cc-transcript` — a different
+tool for a different question, and a much larger artifact.
 
 ## The procedure
 
-Scan each surface and fix drift before closing:
-
-1. **Memory** (`~/.claude/.../memory/`): index (`MEMORY.md`) + files. Every file indexed (no
-   orphans)? Any entry describing finished work as pending/⏳/REMAINING/TODO? Any redundant/duplicate
-   memory? **Distinguish a historical completion record (keep as-is) from a stale pending flag on
-   finished work (fix).**
-
-   Run the generalized index auditor before and after memory edits:
-
+1. **Memory** (`~/.claude/.../memory/`): every file indexed (no orphans)? Any entry describing
+   finished work as pending/⏳/REMAINING/TODO? **Distinguish a historical completion record (keep)
+   from a stale pending flag on finished work (fix).** Run the index auditor before and after edits:
    ```sh
    "$CLAUDE_PLUGIN_ROOT/scripts/memory-index-audit.py" --stale-desc [--reviewed "$CLAUDE_PLUGIN_ROOT/scripts/memory-index-reviewed.txt"]
    ```
-
-   - `--stale-desc` flags any memory whose body announces a correction not reflected in `MEMORY.md`
-   - `--reviewed` suppresses known exceptions (one filename per line; inline `# comments` stripped)
-   - Exits 1 on orphans/broken links; read-only; `--help` exits 0 with usage.
+   (`--stale-desc` flags memory bodies announcing corrections not reflected in `MEMORY.md`; exits 1
+   on orphans/broken links; read-only.)
 2. **Project notes** (e.g. `PROJECT-NOTES.md` in the relevant repos): do "remaining"/"next" lists
    still list things that are done?
-3. **Reminders / crons / scheduled tasks**: still needed, or fired-and-forgotten?
-4. **Task list** (the session task tracker): anything stuck pending/in-progress that's actually done?
-5. **Skill observations** (only if a task-observer skill keeps a log — **SOFT DEPENDENCY**). Never
-   assume its path: task-observer 3.x keeps a user-scope `~/.claude/skill-observations/` (or wherever
-   `TASK_OBSERVER_WORKSPACE` pins it), older installs a per-project `skill-observations/log.md`. Ask
-   the resolver, which prints `none` when there is no log at all — then skip this step silently:
-
+3. **Reminders / scheduled tasks**: still needed, or fired-and-forgotten?
+4. **Task list**: anything stuck pending/in-progress that's actually done?
+5. **Skill observations** (SOFT DEPENDENCY — probe, never assume the path; prints `none` when there
+   is no log, then skip silently):
    ```sh
-   "$CLAUDE_PLUGIN_ROOT/scripts/observation-log.py" --open   # "<layout>\t<path>" + one "open" line each
+   "$CLAUDE_PLUGIN_ROOT/scripts/observation-log.py" --open
    ```
-
-   Review each OPEN entry — action it (create a skill, update a plugin, record in memory) or resolve
-   it. Change status the way the log's own layout does: in the `per-file` layout, edit only that one
-   file's frontmatter (`status`, `resolved`, `resolution`) and let task-observer archive it; in the
-   `legacy` layout, mark it ACTIONED/DECLINED with the date in `log.md`. A `shard` line means two
-   logs observe the same skills — report it rather than picking one. These are PROPOSALS, never authoritative state: promoting one into a durable rule is
-   approval-gated, so an entry you cannot action is closed or left open honestly, not silently kept.
-6. **The waypoints store** (`~/.claude/waypoints.json`, if the `waypoints` plugin is present): mark
-   finished items done (`waypoints.py done <id> --evidence "commit <sha>, tests N/N"` or `--no-evidence "superseded by <id>"`); **add genuinely-open follow-ups** you'd not want to
-   lose as new waypoints (`waypoints.py add "…" [--surface-on YYYY-MM-DD]`). Then **release whatever
-   is no longer waiting**, and finally **prune** — both below.
-
-   **Releasing `waiting` items is the same duty as pruning, pointed the other way.** Pruning clears
-   finished work out of the live store; releasing clears a *false block* off unfinished work. A
-   waypoint in the `waiting` tier is parked on another item in the store, and while it sits there it
-   is deliberately presented as nothing-for-you-to-do. If its condition has actually been met, that
-   presentation is now a lie of exactly the kind this skill exists to catch — worse than a stale
-   done-flag, because it hides work that is ready to start.
-
+   Review each OPEN entry — action it or resolve it. In the per-file layout edit only that one
+   file's frontmatter (`status`, `resolved`, `resolution`); in a legacy `log.md` mark it
+   ACTIONED/DECLINED with the date. A `shard` line means two logs observe the same skills — report
+   it. Entries are PROPOSALS, never authoritative state: promoting one into a durable rule is
+   approval-gated.
+6. **Waypoints store** (SOFT DEPENDENCY — `command -v waypoints.py` first; absent → skip silently.
+   Never hand-edit `~/.claude/waypoints.json`: one JSON document, one bad escape loses every item):
    ```sh
-   waypoints.py resolve        # releases every waiting item whose target(s) have landed
-   waypoints.py list --waiting # what is still parked, and on what
+   waypoints.py done <id> --evidence "…"   # finished items
+   waypoints.py add "…"                    # genuine follow-ups
+   waypoints.py resolve                    # release waiting items whose targets landed
+   waypoints.py list --waiting             # what is still parked, and on what
+   waypoints.py prune                      # move done items to the archive
+   waypoints.py archive list               # the paper trail (`reopen <id>` restores one)
    ```
-
-   `resolve` is cheap, idempotent and safe to run every pass — run it even when you did not touch a
-   waiting item, because the release it performs may have been earned in an *earlier* session.
-   Released items come back **untriaged on purpose** (their own weight was never assessed while they
-   sat in `waiting`), so expect them to want a `waypoints.py triage <id> --tier …` verdict.
-
-   **Two things `resolve` cannot do — they are yours.** It keys purely on whether the target item is
-   `done`, so:
-
-   - **The milestone is descriptive, not evaluated.** A spec like `--waiting-on "some-id @ the
-     design doc lands"` releases only when `some-id` closes *entirely*, even though the milestone
-     itself may have been reached long ago. So read the milestone on each item in
-     `list --waiting` and ask whether *that* has happened. When it has, release the item yourself
-     with `waypoints.py triage <id> --clear` and say in the item why — the CLI cannot judge a
-     sentence, and this is the common case for a long-running target with several milestones.
-   - **Dangling targets are surfaced, not repaired.** `resolve` reports any waiting item pointing at
-     a target that no longer exists (renamed, or a mistyped id). It refuses to guess, because a
-     missing target is indistinguishable from the work having happened. That report is an orphaned
-     record and belongs to this pass: repoint it (`triage <id> --waiting-on "<real-id> @ …"`) or
-     clear the block, but never leave it dangling.
-
-   **Ordering: `done` → `resolve` → `prune`.** Closing an item is the event that earns a release, so
-   resolve after the closures. Prune last, and note that pruning first is not *wrong* — a target that
-   has moved to the archive still counts as landed — it is just a worse read of the same store.
-
-   **Pruning is part of the routine reconciliation, not an extra.** `done` leaves an item in the
-   LIVE store (hidden from the banner but still loaded, counted and paginated with the open work);
-   only `waypoints.py prune` moves the closed pile into the archive. Skip it and the live store
-   grows a tail of finished items forever — which is the same defect this skill exists to fix, one
-   layer down: a record that is technically accurate and practically in the way.
-
+   Ordering: **`done` → `resolve` → `prune`**. Releasing a falsely-parked `waiting` item is the same
+   defect class pointed the other way — a false block hides work that is ready to start. `resolve`
+   keys only on the target's done flag, and the milestone is descriptive, not evaluated by the CLI:
+   read each `list --waiting` milestone yourself, and when it has landed but the target has not,
+   release the item with `waypoints.py triage <id> --clear` and say why. Dangling targets: repoint
+   with `triage <id> --waiting-on "<real-id> @ …"`, never leave them dangling. An
+   unrecognised-command error from `resolve` means the installed waypoints is too old for the
+   waiting tier — skip it and carry on to prune. Released items come back untriaged on purpose.
+   Residual-scope check: if an item's remainder is a subset of a sibling's full scope, close it with
+   its outcome and transfer priority. `scripts/waypoint-reconcile.py` does this deterministically
+   when waypoints is installed.
+7. **Repos touched this session**: committed and clean? Run the shipped secret scanner — never a
+   hand-rolled grep — on exactly the files you touched, NUL-delimited, count checked:
    ```sh
-   waypoints.py prune          # MOVES every done item to the archive; nothing is destroyed
-   waypoints.py archive list   # the paper trail, still readable and restorable
+   "$CLAUDE_PLUGIN_ROOT/scripts/verify-paths.sh" --null
+   "$CLAUDE_PLUGIN_ROOT/scripts/redact-secret.py" --scan-only --require FILE...
    ```
+   Five filter layers (boundary → vendor shape → entropy → assignment-not-keyword → value sanity);
+   `--explain-filtered` shows every near-miss and why; `--self-test` proves the no-false-negative
+   property. `password=`/`token=` hits are report-only without `--include-assignments`. A printed
+   response body can leak a credential too (a ttyd `/token` route returns base64 user:pass) — test
+   auth by STATUS (`curl -o /dev/null -w '%{http_code}'`), never by content. A key found only in a
+   LOCAL transcript was not leaked; rotate only what actually left the machine. Committed fixtures
+   hold key TEMPLATES (`sk-ant-api03-{A:95}`, `AKIA{U:16}`), never literals. Never print a secret
+   and then scrub it — filter by NAME before any value is emitted.
+8. **Local record repos** (`$RECORD_REPOS`, default `~/.claude/plans/`): if a git repo, at wrap-up
+   commit by path (NUL-delimited stage), never add a remote, never push; skip files modified in the
+   last ~2 minutes and name them in the report (another session may still be writing). The
+   durable skip/never choice lives in a visible documented file
+   (`~/.claude/.audit-loose-ends/record-repos.json`), not hidden state.
 
-   Prune **after** you have finished marking things done, so one pass sweeps the whole session's
-   closures. It is safe by construction: archived items stay readable and `waypoints.py reopen <id>`
-   brings one back in one step. If the count looks wrong afterwards, `waypoints.py journal` says
-   which command moved what.
-
-   **Residual-scope redundancy check (skill-obs #8).** For any item that was retargeted, partly
-   completed, or re-scoped, compare what REMAINS against the full scope of sibling items in the
-   same project. If the remainder is a subset of a sibling, close the retargeted item with its
-   achieved outcome and transfer priority, rather than leaving two owners. Tell: bullets like
-   "remaining scope = X" / "residual is Y" where X or Y names a whole other item. A title-level
-   or status-level sweep will not find this — the redundancy is only visible by comparing residual
-   scope against sibling scope.
-
-   **SOFT DEPENDENCY — probe, never assume.** This skill must work unchanged on a machine that
-   does not have waypoints, so do not run any `waypoints.py` command until you have confirmed it
-   is there. One check, and no output means not installed → skip step 6 (the waypoints step) entirely and say nothing
-   about it:
-
-   ```sh
-   command -v waypoints.py >/dev/null 2>&1 && echo installed
-   ```
-
-   Do NOT substitute a hand-edit of `~/.claude/waypoints.json` when the CLI is absent — the file
-   is one JSON document, so a botched escape makes EVERY item unreadable at once. No CLI means
-   this step does not apply, full stop.
-
-   The `waiting` tier and `resolve` arrived later than `done`/`prune`, so an older waypoints may
-   have the CLI but not the subcommand. Treat an unrecognised-command error from `resolve` as
-   "this store has no waiting tier, so there is nothing to release" — skip it and carry on with
-   the prune. Do not report it as a failure, and do not try to emulate it.
-6. **Repos touched this session**: committed and clean? Nothing left uncommitted or accidentally
-   pushed to a public surface? For the credential half of that question, run the scanner that ships
-   with this plugin — **never hand-roll a `grep`**:
-
-   ```sh
-   "$CLAUDE_PLUGIN_ROOT/scripts/redact-secret.py" --scan-only [--explain-filtered] FILE...
-   ```
-
-   **Build the path list unsplittably, and check the count.** A path list assembled from
-   `git status`/`git diff` output can be word-split, and this scanner skips a missing file rather
-   than failing — so a mangled list produces a confident clean result over paths it never opened.
-   Measured 2026-10-25: a split turned 27 filenames into 222 paths and the scanner reported
-   `0 occurrences across 222 files`. Two defences, and use both:
-
-   ```sh
-   git status --porcelain -z | … | xargs -0 …        # NUL-delimited: un-splittable by construction
-   "$CLAUDE_PLUGIN_ROOT/scripts/verify-paths.sh" --null   # guard: FAILS naming every missing path
-   "$CLAUDE_PLUGIN_ROOT/scripts/redact-secret.py" --scan-only --require FILE...   # or make the scanner itself fail
-   ```
-
-   The scanner's summary now distinguishes **named** from **examined** and prints
-   `N NOT EXAMINED` when they differ, so the tell is in the output even without `--require`.
-
-   An improvised pattern (`grep -inE "sk-[A-Za-z0-9]{8}|password|bearer"`) has no word-boundary, no
-   shape test and no value test, so it flags `task-specific`, `on-disk-cache`, `--password` as a flag
-   *name* and `MAX_OUTPUT_TOKENS=8192` — and a real key hides among them. The scanner applies five
-   layers (boundary → vendor shape → entropy → assignment-not-keyword → value sanity), never
-   suppresses silently (`--explain-filtered` shows every near-miss and why), writes nothing under
-   `--scan-only`, and carries a `--self-test` corpus so its no-false-negative property is verified
-   rather than asserted. `password=`/`token=` hits are report-only unless you pass
-   `--include-assignments`. It walks no directories: name the files you touched.
-
-   **A file is not the only place a credential lands — a printed response body is one too.** If the
-   session ran a local service behind auth, check whether it echoed an endpoint that *hands back* the
-   credential. `ttyd`'s `/token` returns the basic-auth pair **base64-encoded**
-   (`{"token":"<base64 user:pass>"}`), so printing that body publishes the password into the
-   transcript; it leaked exactly that way once, while a public tunnel was live, and had to be rotated.
-   Base64 is what makes it survive a glance — it does not read as a secret, and a shape-based scanner
-   will not flag it either. So treat any `/token`, `/session`, `/whoami` or `/debug` route as
-   credential-bearing until proven otherwise, and **test auth by STATUS, never by content**:
-   `curl -o /dev/null -w '%{http_code}'`. The scanner above cannot help here, because the leak is in
-   the transcript rather than in a file you can name — which is why it belongs in the audit rather
-   than in the tool.
-
-   Three more lessons from real incidents, for the same step:
-   - **Committed fixtures hold key TEMPLATES, never literals.** GitHub push protection rejected a test
-     file because its synthetic `sk_live_…` / `xoxb-…` samples had a real vendor shape: a fake value with a
-     real shape is still a push blocker. Write `sk-ant-api03-{A:95}`, `AKIA{U:16}` and expand them at
-     load time; then the file cannot hold a leaked key, and a scan with `--no-corpus-skip` proves it.
-   - **Do not print a secret and then try to scrub it.** An improvised
-     `sed 's/\(TOKEN\|KEY\)=.*/\1=<redacted>/'` leaked a token in cleartext: BSD/macOS `sed` has no `\|`
-     in a basic regex, so the group never matched and `sed` exited 0. Filter by NAME before any value is
-     emitted (`env | cut -d= -f1`, or an explicit list of variables); a value that was never printed
-     cannot leak. If you must scrub, use `sed -E` / `grep -E` and verify the placeholder in the output.
-   - **A key found only in a LOCAL transcript was not leaked.** Scrub it in place with the scanner and
-     say so in one line; recommend rotation only for a secret that actually left the machine (pushed,
-     posted to a service, committed to a published repo). Rotation advice for a local-only key is an
-     alarm over nothing that costs the user's attention.
-
-7. **Local record repos** (`~/.claude/plans/`, and any other durable record directories outside
-   project repos): committed and clean? This is a general plugin step, not audit-loose-ends specific,
-   but lives here because it's the reconciliation pass.
-
-   **SOFT DEPENDENCY — probe for git first.** Absent `git` → skip silently.
-
-   ```sh
-   command -v git >/dev/null 2>&1 || { echo "git not found, skipping local record repos step"; exit 0; }
-   ```
-
-   Target surface: directories in `$RECORD_REPOS` (default: `~/.claude/plans/`). Keep the list in one
-   constant so it can grow.
-
-   **If it is already a git repo:** at wrap-up, `status --porcelain -z`; if non-empty,
-   `redact-secret.py --scan-only` the new/changed files, stage **by path** (`xargs -0 git add --` /
-   `git rm --cached --`, `core.quotepath=off`), and commit with a summary. **Never add a remote,
-   never push.** **Skip files modified in the last ~2 minutes** and name them in the report: another
-   session may still be writing them (observed 2026-09-24, an NVIDIA test plan appeared mid-wrap-up).
-
-   **If it is not a repo, on FIRST invocation**, explain the benefit in 2–3 lines (measured case: 49
-   of 51 deleted plans existed nowhere else except in git history) and ask, using AskUserQuestion:
-   1. **Set it up now (recommended)**: `git init`, an initial commit by path, no remote.
-   2. **Ask me again another time**: snooze. Re-ask after N sessions or days; pick one and document it.
-   3. **Never ask again**: durably disables this step on this installation.
-
-   **Durable choice must be VISIBLE, not hidden state** (no-hidden-changes): store it in a small
-   documented file, e.g. `~/.claude/.audit-loose-ends/record-repos.json`
-   (`{"~/.claude/plans": {"state": "never"|"snoozed"|"enabled", "since": "YYYY-MM-DD"}}`). The skill
-   says where it lives and how to re-enable it, and a tiny `record-repos` subcommand can show and
-   reset it. A declined step prints nothing; it must not keep nagging.
-
-   The per-user memory `plans-dir-is-local-git-repo` then keeps only the machine-specific fact (this
-   repo exists, and the 49 recovered plans) and points at the plugin step. No duplicated rule
-   (where-rules-live).
-
-### Hybrid discovery (agent-side, here — never in a startup hook)
-While reconciling, sweep memories/notes for pending markers (`⏳`, `REMAINING`, `TODO`) that aren't
-yet tracked as waypoints and add them. Keep this in the deliberate audit pass, not the startup
-banner, so the banner stays precise and false-positive-free.
-
-### Waypoint integration (deterministic, failsafe)
-
-At the end of the audit, automatically reconcile the waypoints store with the session's work:
-
-```sh
-# 1. Probe for waypoints CLI (soft dependency — silent if absent)
-if command -v waypoints.py >/dev/null 2>&1; then
-    WAYPOINTS_AVAILABLE=1
-else
-    WAYPOINTS_AVAILABLE=0
-fi
-
-if [ -n "$WAYPOINTS_AVAILABLE" ]; then
-    # 1a. Find waypoints touched this session (from audit-scan.py output)
-    # The audit-scan.py --repos output already lists repos touched; check waypoints.json for items
-    # modified in those repos or with titles matching the session's work
-    
-    # 1b. Update touched waypoints with progress/evidence
-    # If a waypoint's title/description matches work done this session, mark it done with evidence
-    # waypoints.py done <id> --evidence "commit <sha>, tests N/N"
-    
-    # 1c. Add new waypoints for untracked completed work
-    # For each significant completed task not already tracked, add a waypoint
-    # waypoints.py add "Specific actionable title" --detail "..." --point "evidence: ..."
-    
-    # 1d. Release waiting items whose targets have landed
-    waypoints.py resolve
-    
-    # 1e. Prune completed items
-    waypoints.py prune
-fi
-```
-
-**Deterministic script approach**: The heavy lifting is done by a companion script
-`$CLAUDE_PLUGIN_ROOT/scripts/waypoint-reconcile.py` (to be created) that:
-- Reads the audit-scan.py digest for the session
-- Cross-references with waypoints.json
-- Outputs a deterministic list of actions (done, add, release, prune)
-- The model only relays the script's output verbatim — never authors the verdict
-
-**Failsafe design**:
-- Optional dependency: `command -v waypoints.py` probe, silent skip if absent
-- Deterministic script does the heavy lifting; model only relays output
-- If waypoints not installed, step is silently skipped (no error, no nag)
-- Script exits 0 even if waypoints not installed; model just reports "waypoints not available"
+While reconciling, sweep memories/notes for pending markers (⏳, REMAINING, TODO) not yet tracked as
+waypoints and add them — here in the audit pass, never in a startup hook.
 
 ## Finishing an item
 
-Marking something done means marking it done **in whichever surface holds it** — flip the memory's
-flag, tick the note, and `waypoints.py done <id> --evidence "commit <sha>, tests N/N"` (or `--no-evidence "superseded by <id>"`). Don't leave the same completion recorded as open in
-one place and done in another.
+Mark it done **in whichever surface holds it** — flip the memory's flag, tick the note, and
+`waypoints.py done <id> --evidence "commit <sha>, tests N/N"` (or `--no-evidence "superseded by <id>"`).
+Never leave the same completion recorded as open in one place and done in another.
 
 ## Branding (✍️)
 
-When you begin working under this skill, lead your first substantive reply after `/audit-loose-ends` (or `/harvest-lessons`) with "✍️ audit-loose-ends:" so the user can see which plugin just became active.
+Lead the first substantive reply after `/audit-loose-ends` (or `/harvest-lessons`) with
+"✍️ audit-loose-ends:" so the user can see which plugin just became active.
 
-## The point
-
-We never carry stale to-dos or outdated records forward. A future session (or a startup banner)
-should re-surface only what's *genuinely* still open.
+Incident history and measured anecdotes live in `docs/skill-history.md` — the skill body stays
+lean; read that file when a rule's rationale matters.

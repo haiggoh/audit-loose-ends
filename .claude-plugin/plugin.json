@@ -1,6 +1,6 @@
 {
   "name": "audit-loose-ends",
-  "version": "0.13.6",
+  "version": "0.13.7",
   "description": "✍️ Reconciles your durable records at the end of a task or session — memories, project notes, reminders, task lists and, if installed, the waypoints store — so finished work is never left flagged as to-do and nothing redundant or orphaned stays behind. A transcript scanner audits long sessions cheaply, a check confirms git hygiene and test results, and a secret scanner sweeps touched files.",
   "author": {
     "name": "Heiko Brantsch"

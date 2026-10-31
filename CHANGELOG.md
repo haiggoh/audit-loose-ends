@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.13.7] — 2026-10-31 — SKILL.md back inside the 1500-word budget; pyright ✘ findings fixed
+
+- **Changed:** `skills/audit-loose-ends/SKILL.md` shrunk from 3,649 words (over the 1500-word
+  skill budget, check-code SKILL-BUDGET, pre-existing since before 0.13.6) to under budget: the
+  imperative procedure stays, incident history and measured rationale moved to the new
+  `docs/skill-history.md` with a pointer. The waypoint-integration pseudo-code block was replaced
+  by the real `scripts/waypoint-reconcile.py`. harvest-lessons SKILL.md was already in budget.
+- **Fixed:** the two pyright ✘ findings in `scripts/audit-scan.py` (`spec`/`loader` Optional at
+  the redact-secret import) are now guarded (`spec is None or spec.loader is None` → None), same
+  guard in `tests/test_audit_scan.py`; the unused `_LESSON_DECISION_KEYS` constant removed.
+  Remaining pyright ★ lines are intentional underscore-prefixed unused locals and deliberate
+  test monkeypatching (`A.PROJECTS_DIR = …`) — advisory only, the CLI suite is the gate.
+- Tests: full suite green in parallel (rtc-ship.json test_cmd); `test_version_consistency.sh`
+  passes at 0.13.7.
+
 ## [0.13.6] — 2026-10-31 — the lessons classifier reads mid-turn messages and certifies its zeros
 
 - **Fixed:** `audit-scan.py --lessons` printed 0 candidates for session 717b9289, which held 6 user

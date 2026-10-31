@@ -511,6 +511,8 @@ def _load_redactor():
         return None
     try:
         spec = importlib.util.spec_from_file_location("_redact_secret", target)
+        if spec is None or spec.loader is None:
+            return None
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
         return mod
@@ -1303,9 +1305,6 @@ _LESSON_ADVICE = re.compile(r"\b(?:should\s+not|should\s+either|make\s+sure|we\s
 _LESSON_CLARITY = re.compile(r"\b(?:i'?m\s+sorry|what\s+exactly|what\s+do\s+you\s+mean|"
                              r"please\s+(?:inform|explain|clarify|elaborate)|i'?m\s+confused|"
                              r"not\s+sure\s+what\s+you\s+mean)\b", re.I)
-
-# Decision signals: AskUserQuestion answers
-_LESSON_DECISION_KEYS = ("AskUserQuestion", "user_choice", "answers")
 
 def _is_correction_prompt(text):
     """Check if a user prompt contains a correction/redirect signal."""

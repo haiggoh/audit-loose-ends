@@ -22,6 +22,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 SCRIPT = os.path.join(HERE, "..", "scripts", "audit-scan.py")
 
 spec = importlib.util.spec_from_file_location("audit_scan", SCRIPT)
+assert spec is not None and spec.loader is not None
 A = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(A)
 
