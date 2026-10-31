@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.13.4] — 2026-10-31 — memory-index-audit measures against the real 25,000-byte cap
+
+- **Fixed:** `scripts/memory-index-audit.py` defaulted `--limit` to 24,400 bytes, so an index between
+  24,400 and 25,000 bytes was reported as over the limit when it was not. The harness cap is 25,000
+  bytes (it prints that as "24.4KB", which is KiB; 17.1KB is 0.7 x 25,000) plus a 200-line cap.
+  The `--help` text and `skills/harvest-lessons/SKILL.md` carried the same stale figure.
+- Tests: new `tests/test_memory_index_audit.sh` pins both directions (24,700 bytes passes, 25,100 fails)
+  and that an explicit `--limit` still overrides.
+
 ## [0.13.3] — 2026-10-30 — ✍️: the credit-moment mark lands on this plugin's surfaces
 
 - The repo's GitHub About emoji (✍️) now leads what the user and model read at the plugin's credit

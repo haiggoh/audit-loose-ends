@@ -68,7 +68,7 @@ Locate the log — never assume a path (it is user-scope in task-observer 3.x, p
 
 ### 5. Check memory headroom before writing
 
-The `MEMORY.md` index is silently truncated past ~24,400 bytes. Run:
+The `MEMORY.md` index is silently truncated past 25,000 bytes (the harness shows that as "24.4KB", which is KiB). Run:
 
 ```sh
 "$CLAUDE_PLUGIN_ROOT/scripts/memory-index-audit.py" --dir ~/.claude/projects/$(basename $PWD | sed 's/^/-Users-/;s/\//-/g')/memory

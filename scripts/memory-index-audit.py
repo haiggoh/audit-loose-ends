@@ -10,7 +10,8 @@ Usage:
 
 Options:
   --dir DIR      memory directory (default: derived from cwd; falls back to $HOME)
-  --limit BYTES  read limit to measure headroom against (default: 24400)
+  --limit BYTES  read limit to measure headroom against (default: 25000; the harness prints
+                 that cap as "24.4KB", which is KiB, and a 200-line cap applies too)
   --top N        how many longest index lines to list (default: 10)
   --stale-desc   also flag memories whose BODY says CORRECTED/SUPERSEDED but whose
                  frontmatter description does not - recall matches the description, so a
@@ -97,7 +98,7 @@ def check_stale_description(d, f, reviewed_set):
 def main():
     ap = argparse.ArgumentParser(add_help=False)
     ap.add_argument("--dir", default=None)  # None means auto-derive
-    ap.add_argument("--limit", type=int, default=24400)
+    ap.add_argument("--limit", type=int, default=25000)
     ap.add_argument("--top", type=int, default=10)
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--stale-desc", action="store_true")
