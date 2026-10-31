@@ -119,9 +119,14 @@ tool for a different question, and a much larger artifact.
    and then scrub it — filter by NAME before any value is emitted.
 8. **Local record repos** (`$RECORD_REPOS`, default `~/.claude/plans/`): if a git repo, at wrap-up
    commit by path (NUL-delimited stage), never add a remote, never push; skip files modified in the
-   last ~2 minutes and name them in the report (another session may still be writing). The
-   durable skip/never choice lives in a visible documented file
-   (`~/.claude/.audit-loose-ends/record-repos.json`), not hidden state.
+   last ~2 minutes and name them in the report (another session may still be writing). If the dir
+   is NOT a repo, on FIRST invocation explain the benefit in 2–3 lines and ask via
+   **AskUserQuestion**: (1) set up now — `git init`, initial commit by path, no remote
+   (recommended); (2) ask again later (snooze); (3) never ask again (durably disables this step).
+   The choice must be VISIBLE, not hidden state: store it in a documented file, e.g.
+   `~/.claude/.audit-loose-ends/record-repos.json`
+   (`{"<dir>": {"state": "never"|"snoozed"|"enabled", "since": "YYYY-MM-DD"}}`). A declined step
+   prints nothing and never nags.
 
 While reconciling, sweep memories/notes for pending markers (⏳, REMAINING, TODO) not yet tracked as
 waypoints and add them — here in the audit pass, never in a startup hook.

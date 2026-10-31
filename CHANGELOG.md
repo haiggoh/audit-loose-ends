@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.13.8] — 2026-11-01 — restore the first-invocation AskUserQuestion flow the 0.13.7 trim dropped
+
+- **Fixed:** reconciling old vs new SKILL.md line by line found one real functional loss in
+  the 0.13.7 budget trim: step 8's "record dir is not a git repo" branch lost the
+  first-invocation AskUserQuestion flow (set up now / snooze / never) that a fresh install needs.
+  Restored, compressed, in step 8. Everything else the trim removed is either reworded in place
+  (all 35 contract phrases verified present) or moved to `docs/skill-history.md`.
+- Still 1274 -> ~1330 words, inside the 1500 budget; `test_skill.sh`/`test_nudge.sh` pins green.
+
 ## [0.13.7] — 2026-10-31 — SKILL.md back inside the 1500-word budget; pyright ✘ findings fixed
 
 - **Changed:** `skills/audit-loose-ends/SKILL.md` shrunk from 3,649 words (over the 1500-word
