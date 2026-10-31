@@ -1079,6 +1079,13 @@ lesson_transcript.append({"type": "user", "timestamp": "2026-09-07T10:01:02Z", "
     "message": {"role": "user", "content": _user_clarity}})
 lesson_transcript.append({"type": "last-prompt", "timestamp": "2026-09-07T10:01:03Z",
     "sessionId": "test-sess", "lastPrompt": _user_clarity[:200] + "…"})
+# 12. 0.13.10 (obs 0084): the advice shapes that were MISSED on session 4bc80515
+lesson_transcript.append({"type": "queue-operation", "operation": "enqueue",
+    "timestamp": "2026-09-07T10:02:00Z", "sessionId": "test-sess",
+    "content": "QOP-IGNORE any pre-existing test failure can not be ignored — it has to be resolved before the release"})
+lesson_transcript.append({"type": "queue-operation", "operation": "enqueue",
+    "timestamp": "2026-09-07T10:02:01Z", "sessionId": "test-sess",
+    "content": "QOP-SURVIVE cross-references we put there for a reason should survive"})
 
 # unit: the pool reads exactly three record shapes, and only the text blocks of a user record
 eq(A._record_user_text({"type": "queue-operation", "operation": "enqueue", "content": "x"}), "x",
@@ -1124,7 +1131,9 @@ try:
     check("QOP-ADVICE" in r.stdout, "0.13.6: a mid-turn queue-operation enqueue is read as a user turn")
     eq(r.stdout.count("QOP-ADVICE"), 1, "0.13.6: the queue-operation remove twin does not double-count")
     eq(r.stdout.count("USER-CLARITY"), 1, "0.13.6: a user record and its truncated last-prompt twin count once")
-    check("4 corrections" in r.stdout, "0.13.6: 4 corrections (2 last-prompt + 1 queue-op + 1 user)")
+    check("6 corrections" in r.stdout, "0.13.10: 6 corrections (2 last-prompt + 3 queue-op + 1 user)")
+    check("QOP-IGNORE" in r.stdout, "0.13.10 (obs 0084): 'can not be ignored / has to be resolved' fires")
+    check("QOP-SURVIVE" in r.stdout, "0.13.10 (obs 0084): 'should survive' fires")
 finally:
     os.unlink(lesson_path)
 

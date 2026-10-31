@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.13.10] — 2026-11-01 — lesson-classifier recall gap closed (obs 0084)
+
+- **Fixed:** `_LESSON_ADVICE` now also catches the advice shapes that were measured missing on
+  session 4bc80515 ("can not be ignored", "has/must to be", "must be", "should survive",
+  "you should …", "please re-check/verify/reconcile/double-check"). Recall on that session:
+  3 → 5 of 7 queued mid-turn messages (the two still missed are a notes-question and a bare
+  slash-command, not corrections); no regression on 717b9289 (still 12). Corpus gained one MUST
+  per new shape plus a MUSTNOT; `--self-test` fires 20 lines across all 5 classes. Tests pin the
+  new shapes via queue-operation fixtures.
+
 ## [0.13.9] — 2026-11-01 — independent-review restorations into the trimmed SKILL.md
 
 - Reviewed the 0.13.7 trim with an independent model (gemini-3.8-flash validator) plus a

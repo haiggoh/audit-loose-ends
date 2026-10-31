@@ -27,5 +27,11 @@ MUST correction :: check-code should not rely on users knowing the verb lint in 
 MUST correction :: neither session's work should be dismissed outright
 MUST correction :: the description should either not mention waypoints or add a caveat such as "(if installed)"
 MUST correction :: I'm sorry what exactly are we talking about here? please inform me
+# 0.13.10 (obs 0084): the shapes that were missed on session 4bc80515
+MUST correction :: any pre-existing test failure can not be ignored — it has to be resolved before each release
+MUST correction :: cross-references we put there for a reason should survive the trim
+MUST correction :: you should regularly call other agents to review your work
+MUST correction :: please re-check the diff and reconcile old vs new before shipping
 MUSTNOT :: we should probably bump the version before writing the changelog entry
 MUSTNOT :: the harness re-records the latest prompt on many later lines
+MUSTNOT :: we discussed the build plan already, moving on to the release

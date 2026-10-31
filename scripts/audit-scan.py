@@ -1299,9 +1299,14 @@ _LESSON_USER_REDIRECT = re.compile(r"^(?:no|wait|actually|stop|that'?s\s+not|why
 # here?") — a normal user turn with no contradiction word in it. Measured on session 717b9289:
 # 4 of its 6 corrections were advice-shaped, one a bare clarity question, and all four sat in
 # queue-operation records (see _record_user_text).
-_LESSON_ADVICE = re.compile(r"\b(?:should\s+not|should\s+either|make\s+sure|we\s+need\s+to|"
-                            r"follow\s+up\s+with|does\s+nothing\s+to)\b"
-                            r"|\bneither\b[^.\n]{0,80}?\b(?:should|must)\b", re.I)
+# 0.13.10 (obs 0084): recall measured on session 4bc80515 — 4 of ~7 queued corrections missed
+# because their shapes were not in the corpus: "can not be ignored", "has to be resolved",
+# "should survive", "you should …", "please re-check …". All apply only to the user-prompt pool.
+_LESSON_ADVICE = re.compile(r"\b(?:should\s+not|should\s+either|should\s+survive|make\s+sure|"
+                            r"we\s+need\s+to|follow\s+up\s+with|does\s+nothing\s+to|you\s+should|"
+                            r"can(?:not|'t)\s+be\s+ignored|(?:must|has)\s+to\s+be|must\s+be)\b"
+                            r"|\bneither\b[^.\n]{0,80}?\b(?:should|must)\b"
+                            r"|\bplease\s+(?:re-?check|double-?check|verify|reconcile)\b", re.I)
 _LESSON_CLARITY = re.compile(r"\b(?:i'?m\s+sorry|what\s+exactly|what\s+do\s+you\s+mean|"
                              r"please\s+(?:inform|explain|clarify|elaborate)|i'?m\s+confused|"
                              r"not\s+sure\s+what\s+you\s+mean)\b", re.I)
