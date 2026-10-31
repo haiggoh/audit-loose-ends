@@ -11,5 +11,6 @@
 
 
 
-  "refresh_plugin": "audit-loose-ends"
+  "refresh_plugin": "audit-loose-ends",
+  "require_default_branch_checkout": true
 }

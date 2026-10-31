@@ -16,14 +16,38 @@ import subprocess
 import sys
 from pathlib import Path
 
-# Import from waypoints_core for shared functions
-# The waypoints_core module is in ~/ClaudeWorkspace/waypoints/
-WAYPOINTS_ROOT = os.path.expanduser("~/ClaudeWorkspace/waypoints")
-sys.path.insert(0, WAYPOINTS_ROOT)
-from waypoints_core import (
-    load_store, save_store, load_archive, save_archive,
-    promote_landed_waiting, stale_waiting, prune,
-)
+# waypoints is a SOFT dependency: nothing is imported at load time, so --help and argument errors never
+# depend on it, and a machine without waypoints gets "nothing to reconcile", never a crash or a stall.
+# The module used to be imported here from one machine's checkout path (ModuleNotFoundError elsewhere,
+# even for --help — found 2026-10-31).
+
+
+def find_waypoints_core():
+    """Directory holding the INSTALLED waypoints_core.py, or None when waypoints is not installed.
+
+    WAYPOINTS_CORE_DIR, when set, must hold it (a set-but-wrong override fails loudly, exit 2); otherwise
+    the newest waypoints version in the plugin cache — never an older copy left beside it."""
+    explicit = os.environ.get("WAYPOINTS_CORE_DIR")
+    if explicit is not None:
+        if not os.path.isfile(os.path.join(explicit, "waypoints_core.py")):
+            print(f"WAYPOINTS_CORE_DIR={explicit} holds no waypoints_core.py", file=sys.stderr)
+            raise SystemExit(2)
+        return explicit
+
+    def vkey(p):
+        return tuple(int(x) if x.isdigit() else 0 for x in p.name.split("."))
+    cache = Path(os.path.expanduser("~/.claude/plugins/cache"))
+    found = [d for d in cache.glob("*/waypoints/*") if (d / "waypoints_core.py").is_file()]
+    return str(max(found, key=vkey)) if found else None
+
+
+def import_waypoints_core():
+    d = find_waypoints_core()
+    if d is None:
+        return None
+    sys.path.insert(0, d)
+    import waypoints_core
+    return waypoints_core
 
 WAYPOINTS_STORE = os.path.expanduser("~/.claude/waypoints.json")
 
@@ -69,14 +93,6 @@ def run_audit_scan(session_id=None, project=None, all_projects=False):
     return repos, transcript
 
 
-def load_waypoints():
-    """Load waypoints store."""
-    try:
-        return load_store(WAYPOINTS_STORE)
-    except Exception:
-        return {"version": 1, "items": []}
-
-
 def main():
     parser = argparse.ArgumentParser(
         prog="waypoint-reconcile.py",
@@ -104,6 +120,17 @@ def main():
     if not args.repo and not transcript_path:
         print("No repos or transcript specified. Use --repo, --session, or --transcript.", file=sys.stderr)
         return 1
+
+    core = import_waypoints_core()
+    if core is None:
+        print("waypoints is not installed — nothing to reconcile")
+        return 0
+    if not os.path.isfile(WAYPOINTS_STORE):
+        print(f"no waypoints store at {WAYPOINTS_STORE} — nothing to reconcile")
+        return 0
+    load_store, save_store = core.load_store, core.save_store
+    load_archive, save_archive = core.load_archive, core.save_archive
+    promote_landed_waiting, stale_waiting, prune = core.promote_landed_waiting, core.stale_waiting, core.prune
 
     # Load waypoints
     store = load_store(WAYPOINTS_STORE)

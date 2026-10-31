@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.13.5] — 2026-10-31
+
+### Changed
+- The plugin description (plugin.json, and the marketplace listing it feeds) is rewritten to describe
+  the plugin's full current capabilities.
+
+### Fixed
+- `scripts/waypoint-reconcile.py` honours the plugin's soft dependency on waypoints. It imported
+  `waypoints_core` at load time from one machine's checkout path, so anywhere else it crashed with
+  `ModuleNotFoundError` — even on `--help`. It now imports lazily from the installed waypoints (the
+  newest cached version; `WAYPOINTS_CORE_DIR` overrides, and a wrong override exits 2), and without
+  waypoints or without a store it says "nothing to reconcile" and exits 0.
+
 ## [0.13.4] — 2026-10-31 — memory-index-audit measures against the real 25,000-byte cap
 
 - **Fixed:** `scripts/memory-index-audit.py` defaulted `--limit` to 24,400 bytes, so an index between
