@@ -45,7 +45,8 @@ a file and run later, a runtime-computed target, non-Python bodies — cross-che
 the records dir, bounded by the printed session span.
 
 Run the scan on an ordinary wrap too: after a compaction your record of the early session is gone
-while the transcript's is not. Audit a big session from a FRESH session reading the digest — treat a
+while the transcript's is not. Audit a big session the way `resume-interrupted` recovers one: from a
+FRESH session reading the digest — nothing from the old session enters context except the digest. Treat a
 digest-vs-memory disagreement as the digest being right about *what happened* and you being right
 about *what it meant*.
 
@@ -67,7 +68,8 @@ tool for a different question, and a much larger artifact.
    "$CLAUDE_PLUGIN_ROOT/scripts/memory-index-audit.py" --stale-desc [--reviewed "$CLAUDE_PLUGIN_ROOT/scripts/memory-index-reviewed.txt"]
    ```
    (`--stale-desc` flags memory bodies announcing corrections not reflected in `MEMORY.md`; exits 1
-   on orphans/broken links; read-only.)
+   on orphans/broken links; read-only. `--reviewed` suppresses known exceptions — one filename per
+   line, inline `#` comments stripped.)
 2. **Project notes** (e.g. `PROJECT-NOTES.md` in the relevant repos): do "remaining"/"next" lists
    still list things that are done?
 3. **Reminders / scheduled tasks**: still needed, or fired-and-forgotten?
@@ -86,20 +88,22 @@ tool for a different question, and a much larger artifact.
    Never hand-edit `~/.claude/waypoints.json`: one JSON document, one bad escape loses every item):
    ```sh
    waypoints.py done <id> --evidence "…"   # finished items
-   waypoints.py add "…"                    # genuine follow-ups
+   waypoints.py add "…" [--surface-on YYYY-MM-DD]   # genuine follow-ups, optionally deferred
    waypoints.py resolve                    # release waiting items whose targets landed
    waypoints.py list --waiting             # what is still parked, and on what
    waypoints.py prune                      # move done items to the archive
    waypoints.py archive list               # the paper trail (`reopen <id>` restores one)
    ```
-   Ordering: **`done` → `resolve` → `prune`**. Releasing a falsely-parked `waiting` item is the same
+   Ordering: **`done` → `resolve` → `prune`**. Run `resolve` every pass even if you touched no waiting
+   items — a release may have been earned in an earlier session. Releasing a falsely-parked `waiting` item is the same
    defect class pointed the other way — a false block hides work that is ready to start. `resolve`
    keys only on the target's done flag, and the milestone is descriptive, not evaluated by the CLI:
    read each `list --waiting` milestone yourself, and when it has landed but the target has not,
    release the item with `waypoints.py triage <id> --clear` and say why. Dangling targets: repoint
    with `triage <id> --waiting-on "<real-id> @ …"`, never leave them dangling. An
    unrecognised-command error from `resolve` means the installed waypoints is too old for the
-   waiting tier — skip it and carry on to prune. Released items come back untriaged on purpose.
+   waiting tier — skip it and carry on to prune. Released items come back untriaged on purpose; assign
+   them with `waypoints.py triage <id> --tier …`.
    Residual-scope check: if an item's remainder is a subset of a sibling's full scope, close it with
    its outcome and transfer priority. `scripts/waypoint-reconcile.py` does this deterministically
    when waypoints is installed.
@@ -117,16 +121,20 @@ tool for a different question, and a much larger artifact.
    LOCAL transcript was not leaked; rotate only what actually left the machine. Committed fixtures
    hold key TEMPLATES (`sk-ant-api03-{A:95}`, `AKIA{U:16}`), never literals. Never print a secret
    and then scrub it — filter by NAME before any value is emitted.
-8. **Local record repos** (`$RECORD_REPOS`, default `~/.claude/plans/`): if a git repo, at wrap-up
-   commit by path (NUL-delimited stage), never add a remote, never push; skip files modified in the
+8. **Local record repos** (`$RECORD_REPOS`, default `~/.claude/plans/`) — SOFT DEPENDENCY: probe
+   `command -v git` first; absent → skip silently. If a git repo, at wrap-up run
+   `redact-secret.py --scan-only` on the changed files FIRST, then commit by path (NUL-delimited
+   stage), never add a remote, never push; skip files modified in the
    last ~2 minutes and name them in the report (another session may still be writing). If the dir
    is NOT a repo, on FIRST invocation explain the benefit in 2–3 lines and ask via
    **AskUserQuestion**: (1) set up now — `git init`, initial commit by path, no remote
    (recommended); (2) ask again later (snooze); (3) never ask again (durably disables this step).
    The choice must be VISIBLE, not hidden state: store it in a documented file, e.g.
    `~/.claude/.audit-loose-ends/record-repos.json`
-   (`{"<dir>": {"state": "never"|"snoozed"|"enabled", "since": "YYYY-MM-DD"}}`). A declined step
-   prints nothing and never nags.
+   (`{"<dir>": {"state": "never"|"snoozed"|"enabled", "since": "YYYY-MM-DD"}}`); a tiny
+   `record-repos` subcommand can show and reset it. A declined step prints nothing and never nags.
+   The per-user memory `plans-dir-is-local-git-repo` keeps only the machine-specific fact and
+   points at this step — no duplicated rule.
 
 While reconciling, sweep memories/notes for pending markers (⏳, REMAINING, TODO) not yet tracked as
 waypoints and add them — here in the audit pass, never in a startup hook.

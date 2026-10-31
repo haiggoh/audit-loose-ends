@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.13.9] — 2026-11-01 — independent-review restorations into the trimmed SKILL.md
+
+- Reviewed the 0.13.7 trim with an independent model (gemini-3.8-flash validator) plus a
+  scripted cross-reference scan; restored everything that was put there for a reason:
+  the `resume-interrupted` cross-reference and the "nothing from the old session enters
+  context except the digest" isolation rule in step 0; the run-`resolve`-every-pass rule
+  and `triage <id> --tier …` / `--surface-on` commands in step 6; the `--reviewed` file-format
+  note in step 1; the `command -v git` soft-dependency probe AND the pre-commit
+  `redact-secret.py --scan-only` on record-repo commits in step 8 (the one security-relevant
+  loss); the `record-repos` subcommand and `plans-dir-is-local-git-repo` memory pointer.
+- ~1460 words — inside the 1500 budget (the user authorized going over if a restoration needed
+  it; none did). `test_skill.sh`/`test_nudge.sh` pins all green; full suite green.
+
 ## [0.13.8] — 2026-11-01 — restore the first-invocation AskUserQuestion flow the 0.13.7 trim dropped
 
 - **Fixed:** reconciling old vs new SKILL.md line by line found one real functional loss in
