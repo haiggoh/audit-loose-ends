@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.13.11] — 2026-11-03 — test suite no longer prints getcwd noise
+
+- **Fixed:** `tests/test_verify_state.sh` removed temp repos while the shell's cwd was inside
+  them, so every later subshell printed `shell-init: ... getcwd ...` (14 lines under the
+  parallel gate; waypoint audit-loose-ends-test-suite). The test now `cd /` before each
+  `rm -rf` of its cwd tree and captures its own stderr to pin the count at 0
+  (`no getcwd shell-init noise`). Mutation-checked: removing all four guards turns the pin
+  red with exactly 14 lines. Also: the `SCRIPT=` path is derived from the test's own
+  location instead of a hardcoded checkout path. Full suite under the parallel gate: green,
+  0 getcwd lines (was 14).
+
 ## [0.13.10] — 2026-11-01 — lesson-classifier recall gap closed (obs 0084)
 
 - **Fixed:** `_LESSON_ADVICE` now also catches the advice shapes that were measured missing on

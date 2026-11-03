@@ -4,7 +4,13 @@
 
 set -uo pipefail
 
-SCRIPT="$HOME/ClaudeWorkspace/audit-loose-ends/scripts/verify-state.py"
+# Capture stderr for the whole run so the summary can pin "no getcwd noise" (a test that
+# deletes its own cwd makes every later subshell print shell-init getcwd errors — 14 lines
+# under parallel, waypoint audit-loose-ends-test-suite).
+NOISE=$(mktemp)
+exec 2> >(tee "$NOISE" >&2)
+
+SCRIPT="$(cd -P "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/scripts/verify-state.py"
 FAIL=0
 
 check() {
@@ -115,6 +121,7 @@ else
     FAIL=1
 fi
 
+cd /  # leave the tree before removing it — deleting your own cwd prints getcwd noise
 rm -rf "$T" "$STAMP" "$STAMP2" "$STAMP3"
 echo "== read-only discriminant tests done =="
 
@@ -172,6 +179,7 @@ echo "x" > "$R/new.txt"
 $SCRIPT --repo "$R" > /tmp/g2.out 2>&1
 grep -q "FAIL G2 dirty" /tmp/g2.out
 check "$?" "0" "G2: dirty working tree detected"
+cd /  # leave the tree before removing it — deleting your own cwd prints getcwd noise
 rm -rf "$(dirname "$R")"
 
 # G3: ahead of upstream (local commit NOT pushed)
@@ -280,6 +288,7 @@ check "$?" "0" "G7: credentials in remote URL detected"
 ! grep -q "SYNTH_TOKEN_123" /tmp/g7.out
 check "$?" "0" "G7: credential value hidden from output"
 
+cd /  # leave the tree before removing it — deleting your own cwd prints getcwd noise
 rm -rf "$T"
 echo "== G1-G7 tests added =="
 
@@ -374,8 +383,13 @@ check "$?" "0" "H3: force-push detected"
 grep -q "nhc:" /tmp/t1.out
 check "$?" "0" "nhc status line present"
 
+cd /  # leave the tree before removing it — deleting your own cwd prints getcwd noise
 rm -rf "$T"
 echo "== Task 4 tests added =="
+
+n=$(grep -c getcwd "$NOISE" 2>/dev/null || true)
+check "$n" "0" "no getcwd shell-init noise (a test must not delete its own cwd)"
+rm -f "$NOISE"
 
 # ---- Summary ----
 if [ $FAIL -eq 0 ]; then
