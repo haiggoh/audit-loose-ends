@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.13.12] — 2026-11-03 — memory-index-audit resolves the memory dir from the session, not cwd
+
+- **Fixed:** `scripts/memory-index-audit.py` now derives the default project dir from
+  `CLAUDE_CODE_SESSION_ID`'s transcript location (same lookup audit-scan.py uses), with the
+  cwd encoding as fallback; a missing derived dir still fails loudly. Previously a foreign or
+  drifted cwd resolved the wrong project or none at all (waypoint
+  memory-index-audit-cwd-derivation). `MEMORY_AUDIT_PROJECTS_DIR` overrides the projects root
+  (tests). `harvest-lessons` Step 5 no longer builds `--dir` from `basename $PWD` — it calls
+  the script bare and lets the session identity resolve it.
+- Tests: planted transcript fixture, run from a foreign cwd — session-id resolution names the
+  transcript-derived dir, cwd fallback kept, `--dir` to a missing dir fails loudly. 11/11;
+  mutation-checked (resolver disabled -> red). Full parallel suite green.
+
 ## [0.13.11] — 2026-11-03 — test suite no longer prints getcwd noise
 
 - **Fixed:** `tests/test_verify_state.sh` removed temp repos while the shell's cwd was inside

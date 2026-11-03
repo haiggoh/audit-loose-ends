@@ -9,7 +9,8 @@ Usage:
   memory-index-audit.py [--dir DIR] [--limit BYTES] [--top N] [--stale-desc] [--json]
 
 Options:
-  --dir DIR      memory directory (default: derived from cwd; falls back to $HOME)
+  --dir DIR      memory directory (default: derived from this session's transcript via
+                 CLAUDE_CODE_SESSION_ID, else from cwd)
   --limit BYTES  read limit to measure headroom against (default: 25000; the harness prints
                  that cap as "24.4KB", which is KiB, and a 200-line cap applies too)
   --top N        how many longest index lines to list (default: 10)
@@ -22,8 +23,11 @@ Options:
   -h, --help     this help
 
 Exit: 0 ok, 1 over the limit or orphans found.
+
+Environment:
+  MEMORY_AUDIT_PROJECTS_DIR  override the projects root (tests; default ~/.claude/projects)
 """
-import argparse, json, os, re, sys
+import argparse, glob, json, os, re, sys
 
 # a line whose value is mostly dated status rather than a recall hook
 PAST_STATE = re.compile(r'\b(SHIPPED|RESOLVED|DONE|SUPERSEDED|RETIRED|FIXED|v?\d+\.\d+\.\d+|'
@@ -38,6 +42,21 @@ def project_dir_from_cwd(cwd):
             encoded = "-Users-" + rel.replace("/", "-")
             return os.path.join(home, ".claude", "projects", encoded)
     return os.path.join(os.path.expanduser("~"), ".claude", "projects", "-Users-" + os.getenv("USER", "user"))
+
+PROJECTS_DIR = os.path.expanduser(os.environ.get("MEMORY_AUDIT_PROJECTS_DIR", "~/.claude/projects"))
+
+def project_dir_from_session():
+    """Project dir from THIS session's transcript identity (CLAUDE_CODE_SESSION_ID), else None.
+    The transcript always lives at <projects>/<project-id>/<sid>.jsonl — the directory the
+    session was LAUNCHED in, which cwd no longer reflects once it drifts (same lookup
+    audit-scan.py uses; the cwd heuristic stays as the fallback)."""
+    sid = os.environ.get("CLAUDE_CODE_SESSION_ID", "").strip()
+    if not sid:
+        return None
+    for root in glob.glob(os.path.join(PROJECTS_DIR, "*")):
+        if os.path.isfile(os.path.join(root, sid + ".jsonl")):
+            return root
+    return None
 
 def load_reviewed(path):
     """Load reviewed filenames from a file (one per line, # comments allowed)."""
@@ -108,15 +127,17 @@ def main():
     if a.help:
         print(__doc__); return 0
 
-    # Derive default directory from cwd
+    # Derive default directory from this session's transcript identity, cwd as fallback
     if a.dir:
         d = os.path.expanduser(a.dir)
     else:
-        d = os.path.join(project_dir_from_cwd(os.getcwd()), "memory")
+        pd = project_dir_from_session() or project_dir_from_cwd(os.getcwd())
+        d = os.path.join(pd, "memory")
 
     idx_path = os.path.join(d, "MEMORY.md")
     if not os.path.isdir(d) or not os.path.isfile(idx_path):
-        print("no memory index at %s" % idx_path, file=sys.stderr); return 1
+        print("no memory index at %s" % idx_path, file=sys.stderr)
+        return 1
 
     print("Resolved memory directory: %s" % d, file=sys.stderr)
 

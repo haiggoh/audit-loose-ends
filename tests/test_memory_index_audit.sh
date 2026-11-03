@@ -35,5 +35,20 @@ is "--help states the 25000 default" "$("$A" --help 2>&1 | grep -c 'default: 250
 is "--help no longer states the stale 24400" "$("$A" --help 2>&1 | grep -c '24400')" "0"
 is "an explicit --limit still overrides" "$("$A" --dir "$TMP/under" --limit 24000 >/dev/null 2>&1; echo $?)" "1"
 
+# waypoint memory-index-audit-cwd-derivation: the default dir must come from THIS session's
+# transcript (CLAUDE_CODE_SESSION_ID), not cwd — run from a foreign cwd on purpose.
+SID=plantedfakesid01
+PROJROOT="$TMP/projroot"; PROJ="$PROJROOT/proj-enc"
+mkdir -p "$PROJ/memory"
+touch "$PROJ/$SID.jsonl"
+mkindex "$PROJ/memory" 1000
+( cd / && CLAUDE_CODE_SESSION_ID=$SID MEMORY_AUDIT_PROJECTS_DIR=$PROJROOT python3 "$A" >"$TMP/out" 2>&1; echo $? >"$TMP/rc" )
+is "session-id resolution works from a foreign cwd (exit 0)" "$(cat "$TMP/rc")" "0"
+is "  and names the transcript-derived memory dir" "$(grep -c "Resolved memory directory: $PROJ/memory" "$TMP/out")" "1"
+( cd / && MEMORY_AUDIT_PROJECTS_DIR=$PROJROOT python3 "$A" >"$TMP/out2" 2>&1; echo $? >"$TMP/rc2" )
+is "no session id falls back to the cwd-derived dir (old behavior kept)" "$(grep -c "Resolved memory directory: .*projects/-Users-" "$TMP/out2")" "1"
+is "a --dir that does not exist fails LOUDLY (exit 1)" "$("$A" --dir "$TMP/no-such-dir" >"$TMP/out3" 2>&1; echo $?)" "1"
+is "  and says why" "$(grep -c 'no memory index at' "$TMP/out3")" "1"
+
 printf '\npassed %d, failed %d\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

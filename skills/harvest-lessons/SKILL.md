@@ -75,7 +75,7 @@ Locate the log — never assume a path (it is user-scope in task-observer 3.x, p
 The `MEMORY.md` index is silently truncated past 25,000 bytes (the harness shows that as "24.4KB", which is KiB). Run:
 
 ```sh
-"$CLAUDE_PLUGIN_ROOT/scripts/memory-index-audit.py" --dir ~/.claude/projects/$(basename $PWD | sed 's/^/-Users-/;s/\//-/g')/memory
+"$CLAUDE_PLUGIN_ROOT/scripts/memory-index-audit.py"   # resolves the memory dir from this session's transcript (CLAUDE_CODE_SESSION_ID), not cwd
 ```
 
 If over limit or no headroom, report and do not write.
