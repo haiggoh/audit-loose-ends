@@ -1534,6 +1534,32 @@ recs = [{"type": "tool_result", "timestamp": "2026-11-09T03:05:04Z", "sessionId"
 check(any(x["type"] == "guard-block" for x in cands(recs)),
       "Task 4: legacy top-level tool_result with denial text fires guard-block")
 
+# --------------------------------------------------------------------------- 0.13.13 Task 5: wider self-corrections
+print("== 0.13.13 Task 5: widened self-correction phrases (0098 leads + obs 0100), MUSTNOT twins silent ==")
+
+def atext(text, n=0):
+    return {"type": "assistant", "timestamp": f"2026-11-09T03:06:{n:02d}Z", "sessionId": "t5",
+            "message": {"content": [{"type": "text", "text": text}]}}
+
+T5_POS = [
+    "That landed on the wrong waypoint. The search returned the wrong item first.",
+    "that's my bug: the cause was the stale cache",
+    "our earlier result was a false positive, re-extract with the fixed parser",
+    "it looks wrong — the check could not have failed, the port was already true before launch",
+]
+for i, t in enumerate(T5_POS):
+    check(any(x["type"] == "self-correction" for x in cands([atext(t, i)])),
+          f"Task 5 POS: fires: {t[:55]!r}")
+
+T5_NEG = [
+    "see the root cause analysis section of the README for background",
+    "the nightly build re-extracts the table from the warehouse",
+    "It turned out the deploy was already live.",
+]
+for i, t in enumerate(T5_NEG):
+    check(not any(x["type"] == "self-correction" for x in cands([atext(t, i + 10)])),
+          f"Task 5 MUSTNOT twin stays silent: {t[:55]!r}")
+
 print()
 if _fail:
     print(f"FAILURES: {_fail}")

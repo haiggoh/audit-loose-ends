@@ -51,3 +51,13 @@ MUST correction :: I agree with everything except the retention window
 MUST correction :: except for the changelog, the release notes are ready
 MUST correction :: I'd much rather we kept the old flag name
 MUSTNOT :: the release shipped on schedule, no exceptions noted
+#
+# 0.13.13 (Task 5, waypoint 0098 leads + obs 0100 "a check that cannot fail"): widened
+# self-correction vocabulary. Every MUST pairs a reversal with an owned failure; the
+# MUSTNOT twins carry a reversal word but no owned failure and must stay silent.
+MUST self-correction :: That landed on the wrong waypoint — moving it to the right item now
+MUST self-correction :: that's my bug: the cause was the stale cache
+MUST self-correction :: our earlier result was a false positive, re-extract with the fixed parser
+MUST self-correction :: it looks wrong — the check could not have failed, the port was already true before launch
+MUSTNOT :: see the root cause analysis section of the README for background
+MUSTNOT :: the nightly build re-extracts the table from the warehouse

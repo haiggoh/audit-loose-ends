@@ -1284,9 +1284,23 @@ _LESSON_CORRECTION = re.compile(r"\b(?:no,|that'?s\s+wrong|actually,?|instead,?|
 # token alone fired 13/13 on outcome prose ("the corrected trailer", "it turned out the deploy
 # was live"), while the real corrections hid among them. Bare "CORRECTED" is dropped entirely:
 # it was the single noisiest token and every genuine use also carries an owned failure.
-_LESSON_SELF_CORRECTION = re.compile(r"\b(?:was\s+wrong|turned\s+out|disproved|false\s+negative|premise\s+had\s+decayed|conflat\w+|fell\s+into)\b", re.I)
+# 0.13.13 (Task 5, waypoint 0098 leads + obs 0100): widened reversal vocabulary —
+# wrong-target admissions, cause statements, false positive, re-extraction, and the
+# "check that cannot fail" shapes (already true before / could not have failed — the
+# launch-verify lesson of obs 0100). The owned-failure pairing below still applies.
+_LESSON_SELF_CORRECTION = re.compile(r"\b(?:was\s+wrong|turned\s+out|disproved|false\s+negative|false\s+positive|premise\s+had\s+decayed|conflat\w+|fell\s+into)\b"
+                                   r"|\blanded\s+on\s+the\s+wrong\b"
+                                   r"|\bthat'?s\s+(?:a|my)\s+(?:mistake|bug)\b"
+                                   r"|\bthe\s+cause\s+was\b|\broot\s+cause\b"
+                                   r"|\blooks\s+wrong\b|\bre-?extract\w*\b"
+                                   r"|\balready\s+true\s+before\b"
+                                   r"|\bcould(?:n't| not)\s+have\s+failed\b", re.I)
+# 0.13.13 (Task 5): "landed on the wrong X", "that's my bug", "looks wrong" and "false
+# positive" are wrongness admissions in themselves — they satisfy the owned-failure side
+# without a separate my/our token (measured: af94571f line 1054 has neither).
 _LESSON_OWNED_FAILURE = re.compile(r"\b(?:my|our)\b[^.\n]{0,80}?\b(?:wrong|incorrect|mistake|mistaken|inverted|backwards)\b"
-                                   r"|\bI\s+(?:was\s+wrong|conflat\w+|fell\s+into|misread|assumed\s+wrongly)\b", re.I)
+                                   r"|\bI\s+(?:was\s+wrong|conflat\w+|fell\s+into|misread|assumed\s+wrongly)\b"
+                                   r"|\b(?:landed\s+on\s+the\s+wrong|that'?s\s+(?:a|my)\s+(?:mistake|bug)|looks\s+wrong|false\s+(?:negative|positive))\b", re.I)
 # Matched ONLY against the text of an ERRORED tool result (see _errored_tool_results): the bare word
 # "schema" anywhere in a record flagged hook text, prose and edit payloads — 24/24 noise on 2026-09-30.
 _LESSON_SCHEMA_ERROR = re.compile(r"InputValidationError|\bExpected\s+\w+,\s+got\s+\w+|\bvalidation\s+error\b|"

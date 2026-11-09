@@ -294,3 +294,12 @@ Confirm you stopped at the release boundary and touched no memory/CLAUDE.md file
   (the real hook block) is is_error. af94571f: 13 -> 9 candidates, guard-block = line 95 only.
   Suite exit=0, self-test 28/6 exit=0. Mutation: errored-only dropped -> quoted-BLOCKED
   MUSTNOT red; restored.
+- 2026-11-09 ~04:00 — Task 5 DONE: _LESSON_SELF_CORRECTION widened (landed on the wrong /
+  that's my bug / the cause was / root cause / looks wrong / false positive / re-extract /
+  already true before / could not have failed — the last two from the user's obs-0100
+  launch-check example); _LESSON_OWNED_FAILURE now also accepts landed-on-the-wrong,
+  that's-my-bug, looks-wrong, false positive as self-standing wrongness admissions (measured:
+  af94571f line 1054 has no my/our token). MUSTNOT twins (README root-cause section, nightly
+  re-extract) stay silent via the pairing. af94571f: self-corrections 0->2, line 1054 fires;
+  total 11 candidates. Suite exit=0, self-test 32/6 exit=0. Mutation: landed-on-the-wrong
+  removed from owned -> self-test miss on its MUST; restored.
