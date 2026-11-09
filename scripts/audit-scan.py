@@ -1513,6 +1513,52 @@ def _tool_result_texts(d):
     return out
 
 
+# 0.13.13 (Task 6): durable surfaces whose writes are lesson-shaped — a memory *.md, an
+# observation-log *.md, or a playbook edit touching a Pitfalls section.
+# (the delta shape joins realParentDir + basename(trackingPath), which drops the
+# observation-log level — so the pattern also matches a bare "observation-log/…" trackingPath)
+_LESSON_WRITE_PATH = re.compile(r"(?:^|/)(?:(?:skill-observations/)?observation-log|memory)/[^/]+\.md$")
+
+def _lesson_shaped_write_lines(path):
+    """Line numbers of records that WRITE a lesson-shaped durable surface (tool calls and
+    file-history deltas both count; a Read of the same file does not)."""
+    out = []
+    with open(path, encoding="utf-8", errors="replace") as fh:
+        for n, line in enumerate(fh, 1):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                d = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(d, dict):
+                continue
+            if d.get("type") == "file-history-delta":
+                tp = str(d.get("trackingPath") or "")
+                b = d.get("backup") or {}
+                full = os.path.join(str(b.get("realParentDir") or ""), os.path.basename(tp))
+                if _LESSON_WRITE_PATH.search(full) or _LESSON_WRITE_PATH.search(tp):
+                    out.append(n)
+                continue
+            if d.get("type") == "assistant":
+                for blk in (d.get("message") or {}).get("content") or []:
+                    if not (isinstance(blk, dict) and blk.get("type") == "tool_use"
+                            and blk.get("name") in ("Write", "Edit", "MultiEdit")):
+                        continue
+                    inp = blk.get("input") or {}
+                    if not isinstance(inp, dict):
+                        continue
+                    fp = str(inp.get("file_path") or "")
+                    if _LESSON_WRITE_PATH.search(fp):
+                        out.append(n)
+                    elif (blk.get("name") == "Edit" and fp.endswith(".md")
+                          and "Pitfalls" in str(inp.get("old_string") or "")
+                          + str(inp.get("new_string") or "")):
+                        out.append(n)
+    return out
+
+
 def _record_user_text(d):
     """The human-typed text a record carries, "" for everything else. Three shapes hold it:
     a `last-prompt` record's `lastPrompt` (the harness re-records the latest prompt on many
@@ -1892,12 +1938,17 @@ def _flatten(d):
 def lessons(paths):
     """Mine deterministic lesson candidates from transcripts."""
     all_candidates = []
+    recall_gaps = []   # 0.13.13 (Task 6): (transcript, n_writes) with 0 candidates near them
     for path in paths:
         scan = Scan(path).run()
         candidates = _extract_lesson_candidates(scan)
         for c in candidates:
             c["transcript"] = os.path.basename(path)
         all_candidates.extend(candidates)
+        writes = _lesson_shaped_write_lines(path)
+        near = [w for w in writes if any(abs(c["line"] - w) <= 50 for c in candidates)]
+        if writes and not near:
+            recall_gaps.append((os.path.basename(path), len(writes)))
 
     # Count by type
     counts = collections.Counter(c["type"] for c in all_candidates)
@@ -1923,6 +1974,9 @@ def lessons(paths):
             ("schema-error", "schema-errors"), ("guard-block", "guard-blocks")))
         print(f"  (none) — per-class zeros: {zeros}"
               + ("" if certified else "  [no self-test corpus: every zero is UNKNOWN]"))
+        for name, n in recall_gaps:
+            print(f"\nGAPS — RECALL GAP: {name}: {n} lesson-shaped write(s), 0 candidates "
+                  "within ±50 records — harvest by hand")
         return 0
 
     # Summary line the main skill reads
@@ -1946,6 +2000,12 @@ def lessons(paths):
     # Final line for the main skill
     if total > 0:
         print(f"\n{total} lesson candidates found ({cfmt('correction', c_corr)} corrections, {cfmt('retry-after-fail', c_retry)} retries, {cfmt('decision', c_dec)} decisions, {cfmt('self-correction', c_self)} self-corrections, {cfmt('guard-block', c_guard)} guard-blocks) — run harvest-lessons? (~{total * 1.5:.0f}K budgeted)")
+
+    # 0.13.13 (Task 6): RECALL GAP under a GAPS header — the session wrote lesson-shaped
+    # durable records but the scanner found nothing near them.
+    for name, n in recall_gaps:
+        print(f"\nGAPS — RECALL GAP: {name}: {n} lesson-shaped write(s), 0 candidates "
+              "within ±50 records — harvest by hand")
 
     return 0
 

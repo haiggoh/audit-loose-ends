@@ -303,3 +303,10 @@ Confirm you stopped at the release boundary and touched no memory/CLAUDE.md file
   re-extract) stay silent via the pairing. af94571f: self-corrections 0->2, line 1054 fires;
   total 11 candidates. Suite exit=0, self-test 32/6 exit=0. Mutation: landed-on-the-wrong
   removed from owned -> self-test miss on its MUST; restored.
+- 2026-11-09 ~04:10 — Task 6 DONE: RECALL GAP printed under a GAPS header by the --lessons pass
+  when a transcript has lesson-shaped writes (memory *.md, observation-log *.md delta or
+  tool call, playbook Pitfalls edit) and NO candidate within ±50 records of any of them.
+  af94571f: 7 lesson-shaped writes (lines 155,461,462,480,481,1240,1241), 3 near a candidate
+  -> no gap (correct per the 0-near wording). Unit fixtures both ways (gap fires / suppressed
+  near / no writes / Read-is-not-a-write). Suite exit=0, self-test exit=0. Mutation: gap
+  condition inverted -> both gap tests red; restored.

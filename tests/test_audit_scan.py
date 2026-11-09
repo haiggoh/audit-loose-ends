@@ -1560,6 +1560,66 @@ for i, t in enumerate(T5_NEG):
     check(not any(x["type"] == "self-correction" for x in cands([atext(t, i + 10)])),
           f"Task 5 MUSTNOT twin stays silent: {t[:55]!r}")
 
+# --------------------------------------------------------------------------- 0.13.13 Task 6: RECALL GAP
+print("== 0.13.13 Task 6: RECALL GAP — lesson-shaped writes with no candidate near them ==")
+
+def run_lessons(recs):
+    with tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False) as fh:
+        for r in recs:
+            fh.write(json.dumps(r) + "\n")
+        path = fh.name
+    try:
+        r = subprocess.run([sys.executable, SCRIPT, path, "--lessons"],
+                           capture_output=True, text=True, timeout=30)
+        return r.stdout
+    finally:
+        os.unlink(path)
+
+def mem_edit(n):
+    return {"type": "assistant", "timestamp": f"2026-11-09T03:07:{n:02d}Z", "sessionId": "t6",
+            "message": {"content": [{"type": "tool_use", "id": f"m{n}", "name": "Edit",
+                                     "input": {"file_path": "/home/x/.claude/projects/p/memory/foo.md",
+                                               "old_string": "a", "new_string": "b"}}]}}
+
+filler = [{"type": "assistant", "timestamp": f"2026-11-09T03:08:{i:02d}Z", "sessionId": "t6",
+           "message": {"content": [{"type": "text", "text": f"filler {i}"}]}} for i in range(60)]
+
+# POS: a lesson-shaped memory write 60+ records away from the only candidate -> RECALL GAP
+out = run_lessons([lp("no, that's wrong, use the other flag", 0)] + filler + [mem_edit(99)])
+check("RECALL GAP" in out and "1 lesson-shaped write(s), 0 candidates" in out,
+      "Task 6: lesson-shaped write with 0 candidates within ±50 records prints RECALL GAP",
+      out[-300:])
+
+# NEG: the same write but a candidate WITHIN 50 records -> no RECALL GAP
+out = run_lessons([lp("no, that's wrong, use the other flag", 0), mem_edit(1)] + filler[:40])
+check("RECALL GAP" not in out,
+      "Task 6: a candidate within ±50 records of the write suppresses RECALL GAP", out[-200:])
+
+# NEG: no lesson-shaped writes at all -> never a gap, even with candidates
+out = run_lessons([lp("no, that's wrong, use the other flag", 0)] + filler[:5])
+check("RECALL GAP" not in out, "Task 6: no lesson-shaped writes -> no RECALL GAP")
+
+# NEG: a Read of a memory file is not a write
+recs = [lp("no, that's wrong, use the other flag", 0)] + filler + [
+    {"type": "assistant", "timestamp": "2026-11-09T03:09:00Z", "sessionId": "t6",
+     "message": {"content": [{"type": "tool_use", "id": "rd", "name": "Read",
+                              "input": {"file_path": "/home/x/.claude/projects/p/memory/foo.md"}}]}}]
+check("RECALL GAP" not in run_lessons(recs), "Task 6: a Read of a memory file is not a lesson-shaped write")
+
+# unit: write-line detection covers observation-log and playbook Pitfalls edits
+eq(A._lesson_shaped_write_lines.__name__, "_lesson_shaped_write_lines", "helper exists")
+with tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False) as fh:
+    fh.write(json.dumps({"type": "file-history-delta", "trackingPath": "observation-log/0101-x.md",
+                         "backup": {"realParentDir": "/home/x/.claude/skill-observations"}}) + "\n")
+    fh.write(json.dumps(mem_edit(1)) + "\n")
+    fh.write(json.dumps({"type": "assistant", "message": {"content": [
+        {"type": "tool_use", "name": "Edit", "input": {"file_path": "/x/docs/plans/Playbook-a.md",
+         "old_string": "## Pitfalls", "new_string": "## Pitfalls\n- new"}}]}}) + "\n")
+    p6 = fh.name
+eq(A._lesson_shaped_write_lines(p6), [1, 2, 3],
+   "lesson-shaped writes: observation-log delta + memory Edit + playbook Pitfalls edit")
+os.unlink(p6)
+
 print()
 if _fail:
     print(f"FAILURES: {_fail}")
