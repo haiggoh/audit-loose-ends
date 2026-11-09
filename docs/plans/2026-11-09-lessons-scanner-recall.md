@@ -256,3 +256,12 @@ Confirm you stopped at the release boundary and touched no memory/CLAUDE.md file
   skill-updates/2026-11-06/{audit-loose-ends,harvest-lessons} LOCATED under
   ~/.claude/skill-observations/; denial wording observed = `🥾 watch-your-step: ✖ BLOCKED — …` inside
   Bash tool_result content, plus top-level `toolDenialKind` records (counted in s.denials).
+- 2026-11-09 ~02:30 — Task 1 DONE: block-shape pairing implemented (`_tool_target`/`_tool_input_key`,
+  tool_use_id pairing, next-3-tool-calls window, git subcommand target, decision from
+  toolUseResult.answers). Discriminant receipt: new scenarios failed on UNMODIFIED code
+  (self-test exit=1, exactly 2 misses: both block-shape scenarios; unit positives got=[]). Green:
+  suite exit=0 (421 ok), self-test 22 fired/5 classes exit=0. Mutation checks: window >30 →
+  "4th call outside window" red; decision disabled → decision--block-shape miss red; both restored.
+  af94571f delta: 4→10 candidates (retries 0→4, decisions 0→2 incl. line 830). Ruling: retry
+  candidate line = the retrying call; compound retries pair on the first subcommand only
+  (`git add X && git commit` targets "git add") — accepted heuristic limit, recorded here.

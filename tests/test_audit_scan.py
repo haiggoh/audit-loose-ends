@@ -1295,6 +1295,94 @@ with tempfile.TemporaryDirectory() as td:
     check("0 retries" in r.stdout and "UNKNOWN" not in r.stdout,
           "with the corpus present the same zeros are certified real zeros", r.stdout[-300:])
 
+# --------------------------------------------------------------------------- 0.13.13 Task 1: REAL record shape
+print("== 0.13.13 Task 1: tool_result BLOCKS inside user records (real transcripts have 0 top-level tool_result records) ==")
+
+def tu(tid, name, inp, n):
+    return {"type": "assistant", "timestamp": f"2026-11-09T03:00:{n:02d}Z", "sessionId": "t1",
+            "message": {"content": [{"type": "tool_use", "id": tid, "name": name, "input": inp}]}}
+
+def tr_block(tid, content, err=False, n=0):
+    blk = {"type": "tool_result", "tool_use_id": tid, "content": content}
+    if err:
+        blk["is_error"] = True
+    return {"type": "user", "timestamp": f"2026-11-09T03:01:{n:02d}Z", "sessionId": "t1",
+            "message": {"role": "user", "content": [blk]}}
+
+def cands(recs):
+    # _extract_lesson_candidates re-reads scan.path, so the temp file must outlive the Scan —
+    # scan_records() unlinks too early for this use.
+    with tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False) as fh:
+        for r in recs:
+            fh.write(json.dumps(r) + "\n")
+        path = fh.name
+    try:
+        return A._extract_lesson_candidates(A.Scan(path).run())
+    finally:
+        os.unlink(path)
+
+# POS: errored block result paired to its tool_use, then a DIFFERENT command on the same
+# git subcommand target within the next 3 tool calls -> retry-after-fail at the retry's line
+recs = [tu("a", "Bash", {"command": "git commit -m wip"}, 0),
+        tr_block("a", "Exit code 1\nnothing staged for commit", True, 0),
+        tu("b", "Bash", {"command": "git commit -m wip -- src/x.py"}, 1)]
+c = cands(recs)
+check("retry-after-fail" in [x["type"] for x in c],
+      "block-shape: failed tool_result + different command on same git subcommand fires retry-after-fail",
+      f"got={[x['type'] for x in c]}")
+eq([x["line"] for x in c if x["type"] == "retry-after-fail"], [3],
+   "the retry candidate points at the RETRYING call's line, not the failure's")
+
+# NEG: failed call followed by an UNRELATED target stays silent
+recs = [tu("a", "Bash", {"command": "git commit -m wip"}, 0),
+        tr_block("a", "Exit code 1\nnothing staged", True, 0),
+        tu("b", "Bash", {"command": "ls -la"}, 1)]
+check("retry-after-fail" not in [x["type"] for x in cands(recs)],
+      "block-shape MUSTNOT: a failed call followed by an unrelated call stays silent")
+
+# NEG: the SAME command repeated is not a retry
+recs = [tu("a", "Bash", {"command": "git commit -m wip"}, 0),
+        tr_block("a", "Exit code 1\nnothing staged", True, 0),
+        tu("b", "Bash", {"command": "git commit -m wip"}, 1)]
+check("retry-after-fail" not in [x["type"] for x in cands(recs)],
+      "block-shape MUSTNOT: an identical repeated command is not a retry")
+
+# window: the retry must land within the next 3 tool calls (3rd call fires, 4th does not)
+recs = [tu("a", "Bash", {"command": "git commit -m wip"}, 0),
+        tr_block("a", "Exit code 1", True, 0),
+        tu("b", "Bash", {"command": "ls"}, 1), tu("c", "Bash", {"command": "pwd"}, 2),
+        tu("d", "Bash", {"command": "git commit -m wip -- src/y.py"}, 3)]
+check("retry-after-fail" in [x["type"] for x in cands(recs)],
+      "block-shape: a retry on the 3rd following tool call still fires")
+recs = [tu("a", "Bash", {"command": "git commit -m wip"}, 0),
+        tr_block("a", "Exit code 1", True, 0),
+        tu("b", "Bash", {"command": "ls"}, 1), tu("c", "Bash", {"command": "pwd"}, 2),
+        tu("d", "Bash", {"command": "cat f"}, 3),
+        tu("e", "Bash", {"command": "git commit -m wip -- src/y.py"}, 4)]
+check("retry-after-fail" not in [x["type"] for x in cands(recs)],
+      "block-shape MUSTNOT: a retry on the 4th following tool call is outside the window")
+
+# POS: an answered AskUserQuestion in the REAL shape (user record's toolUseResult) -> decision
+recs = [tu("q1", "AskUserQuestion", {"questions": [{"question": "Which approach?",
+                                                      "options": [{"label": "Option A"}, {"label": "Option B"}]}]}, 0),
+        {"type": "user", "timestamp": "2026-11-09T03:02:00Z", "sessionId": "t1",
+         "message": {"role": "user", "content": [
+             {"type": "tool_result", "tool_use_id": "q1", "content": "Your questions have been answered."}]},
+         "toolUseResult": {"questions": [{"question": "Which approach?"}],
+                           "answers": {"Which approach?": "Option A"}, "annotations": {}}}]
+c = cands(recs)
+check("decision" in [x["type"] for x in c],
+      "block-shape: toolUseResult.answers on the user record fire decision",
+      f"got={[x['type'] for x in c]}")
+check(any("Option A" in x["excerpt"] for x in c if x["type"] == "decision"),
+      "the decision excerpt names the chosen answer")
+
+# NEG: an errored block whose tool_use_id is unknown must not crash or fire
+recs = [tr_block("ghost", "boom", True, 0)]
+c = cands(recs)
+check(c == [], "an errored tool_result block with no matching tool_use is ignored, not a crash",
+      f"got={c}")
+
 print()
 if _fail:
     print(f"FAILURES: {_fail}")

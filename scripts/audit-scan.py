@@ -1461,6 +1461,33 @@ def _record_user_text(d):
     return ""
 
 
+def _tool_target(name, inp):
+    """Stable per-call target for retry pairing: Bash = first word plus, for git, the subcommand
+    (so `git commit` and `git status` are different targets, but `git commit a` and
+    `git commit b` are the same one); Edit/Write-family = the file path."""
+    if not isinstance(inp, dict):
+        return ""
+    if name == "Bash":
+        parts = str(inp.get("command") or "").split()
+        if not parts:
+            return ""
+        if parts[0] == "git" and len(parts) > 1 and not parts[1].startswith("-"):
+            return "git " + parts[1]
+        return parts[0]
+    if name in ("Write", "Edit", "MultiEdit", "NotebookEdit"):
+        return str(inp.get("file_path") or inp.get("notebook_path") or inp.get("path") or "")
+    return ""
+
+
+def _tool_input_key(name, inp):
+    """What makes a later call a DIFFERENT input: the command for Bash, the whole input otherwise."""
+    if not isinstance(inp, dict):
+        return ""
+    if name == "Bash":
+        return str(inp.get("command") or "")
+    return json.dumps(inp, sort_keys=True, default=str)
+
+
 def _extract_lesson_candidates(scan):
     """Extract deterministic lesson candidates from a scan.
 
@@ -1476,6 +1503,14 @@ def _extract_lesson_candidates(scan):
     error_tool_results = {}  # (tool_name, target) -> line_num
     last_tool_calls = {}     # tool_name -> (command, line_num)
     seen_prompts = set()     # the harness re-records the latest prompt on many later lines
+
+    # 0.13.13 (Task 1): the REAL record shape — assistant tool_use blocks paired with the
+    # tool_result blocks (by tool_use_id) inside the user records that follow them. Real
+    # transcripts contain 0 top-level tool_result records (af94571f: 0 top-level vs 171
+    # blocks), so the legacy sections 3–5 below never fire on them; this path does.
+    tool_uses = {}       # tool_use_id -> (name, target, input_key)
+    pending_fails = []   # {"tool","target","input_key","call_no"} — errored results awaiting a retry
+    call_no = 0          # count of tool_use blocks seen so far
 
     for line_num, line in enumerate(lines, 1):
         line = line.strip()
@@ -1562,6 +1597,30 @@ def _extract_lesson_candidates(scan):
                 if isinstance(blk, dict) and blk.get("type") == "tool_use":
                     tool_name = blk.get("name") or ""
                     inp = blk.get("input") or {}
+                    # 0.13.13 block-shape pairing: register this call, then check it against
+                    # pending errored results whose retry window (next 3 tool calls) is open.
+                    call_no += 1
+                    tinp = inp if isinstance(inp, dict) else {}
+                    ttarget = _tool_target(tool_name, tinp)
+                    tkey = _tool_input_key(tool_name, tinp)
+                    if blk.get("id"):
+                        tool_uses[blk["id"]] = (tool_name, ttarget, tkey)
+                    still_pending = []
+                    for f in pending_fails:
+                        if call_no - f["call_no"] > 3:
+                            continue  # retry window expired — drop the failure
+                        if (f["target"] and f["tool"] == tool_name and f["target"] == ttarget
+                                and f["input_key"] != tkey):
+                            src = tinp.get("command") if tool_name == "Bash" else json.dumps(tinp, default=str)
+                            candidates.append({
+                                "type": "retry-after-fail",
+                                "line": line_num,
+                                "excerpt": str(src)[:160].replace("\n", " ⏎ "),
+                                "category": f"retry:{tool_name}",
+                            })
+                            continue  # consumed — one retry candidate per failure
+                        still_pending.append(f)
+                    pending_fails = still_pending
                     if tool_name == "Bash":
                         cmd = inp.get("command", "")
                         target = cmd.split()[0] if cmd.split() else ""
@@ -1623,6 +1682,34 @@ def _extract_lesson_candidates(scan):
                 "excerpt": excerpt,
                 "category": "validation-error"
             })
+
+        # 7. 0.13.13 (Task 1): user records carry the REAL tool results — pair each errored
+        #    tool_result block with its assistant tool_use by tool_use_id, and read an
+        #    answered AskUserQuestion from the same record's toolUseResult.
+        if rec_type == "user":
+            msg = d.get("message") or {}
+            cont = msg.get("content") if isinstance(msg, dict) else None
+            if isinstance(cont, list):
+                for blk in cont:
+                    if (isinstance(blk, dict) and blk.get("type") == "tool_result"
+                            and blk.get("is_error")):
+                        info = tool_uses.get(blk.get("tool_use_id"))
+                        if info:
+                            name, target, ikey = info
+                            if target:
+                                pending_fails.append({"tool": name, "target": target,
+                                                      "input_key": ikey, "call_no": call_no})
+            tr = d.get("toolUseResult")
+            if isinstance(tr, dict):
+                answers = tr.get("answers")
+                if isinstance(answers, dict) and answers:
+                    choice = "; ".join(f"{q} → {a}" for q, a in list(answers.items())[:3])
+                    candidates.append({
+                        "type": "decision",
+                        "line": line_num,
+                        "excerpt": f"AskUserQuestion: {choice}"[:160],
+                        "category": "user-decision",
+                    })
 
     return candidates
 
