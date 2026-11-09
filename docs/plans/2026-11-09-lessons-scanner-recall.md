@@ -285,3 +285,12 @@ Confirm you stopped at the release boundary and touched no memory/CLAUDE.md file
   27/5 exit=0. Mutation: pasted threshold 0.99 -> both pasted tests red; restored.
   Validator (local-laguna-s, poolside family, no-nvidia prefs, role dropped per user):
   Tasks 1+2 diff = "clean".
+- 2026-11-09 ~03:50 — Task 4 DONE: new class `guard-block` (in _LESSON_ALL_CLASSES, summary line,
+  display, self-test). Fires on ERRORED tool_result blocks matching denial wording
+  (PreToolUse / hook error / BLOCKED / permission denied / denied by rule|hook /
+  watch-your-step:) plus toolDenialKind==permission-rule records; user-rejected excluded;
+  one candidate per record. Ruling: errored-only on the block shape — af94571f lines 124/331
+  are non-errored Reads of a playbook quoting "BLOCKED" and fired until restricted; line 95
+  (the real hook block) is is_error. af94571f: 13 -> 9 candidates, guard-block = line 95 only.
+  Suite exit=0, self-test 28/6 exit=0. Mutation: errored-only dropped -> quoted-BLOCKED
+  MUSTNOT red; restored.

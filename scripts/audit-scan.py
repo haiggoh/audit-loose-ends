@@ -1291,6 +1291,11 @@ _LESSON_OWNED_FAILURE = re.compile(r"\b(?:my|our)\b[^.\n]{0,80}?\b(?:wrong|incor
 # "schema" anywhere in a record flagged hook text, prose and edit payloads — 24/24 noise on 2026-09-30.
 _LESSON_SCHEMA_ERROR = re.compile(r"InputValidationError|\bExpected\s+\w+,\s+got\s+\w+|\bvalidation\s+error\b|"
                                   r"\bis\s+expected\s+as\s+`?\w+`?\s+but\s+provided\b|\bInput\s+shape\b", re.I)
+# 0.13.13 (Task 4): hook/permission denials surfacing in a tool result. Measured wording on
+# real transcripts: "PreToolUse:Bash hook error: 🥾 watch-your-step: ✖ BLOCKED — …"
+# (af94571f line 95) and "permission denied by rule".
+_LESSON_GUARD_BLOCK = re.compile(r"PreToolUse\b|hook error|\bBLOCKED\b|permission denied"
+                                 r"|denied by (?:rule|hook)|watch-your-step:", re.I)
 
 # User prompt patterns that signal a correction/redirect
 _LESSON_USER_REDIRECT = re.compile(r"^(?:no|wait|actually|stop|that'?s\s+not|why\s+did|I\s+said|don'?t)\b", re.I)
@@ -1386,7 +1391,8 @@ _LESSON_CORPUS_CLASSES = {
 # Every class --lessons reports (0.13.6). The two structural classes have no single-text
 # predicate, so the self-test fires them through planted record scenarios in
 # tests/fixtures/lessons-scenarios/<class>[--<slug>].jsonl, run through the SAME extractor.
-_LESSON_ALL_CLASSES = ("correction", "retry-after-fail", "decision", "self-correction", "schema-error")
+_LESSON_ALL_CLASSES = ("correction", "retry-after-fail", "decision", "self-correction",
+                       "schema-error", "guard-block")
 
 
 def _fixture_dir():
@@ -1472,6 +1478,26 @@ def _errored_tool_results(d):
                     c = " ".join(str(x.get("text") or "") for x in c if isinstance(x, dict))
                 out.append(str(c or ""))
     return out
+
+def _tool_result_texts(d):
+    """(text, is_error) for ALL tool results in this record, both shapes: the real one
+    (tool_result blocks inside a user record's message.content) and the legacy flat
+    top-level tool_result record."""
+    out = []
+    if d.get("type") in ("tool_result", "tool-result"):
+        out.append((" ".join(str(d.get(k) or "") for k in ("error", "content", "output")),
+                    bool(d.get("isError") or d.get("is_error"))))
+    msg = d.get("message") or {}
+    cont = msg.get("content") if isinstance(msg, dict) else None
+    if isinstance(cont, list):
+        for b in cont:
+            if isinstance(b, dict) and b.get("type") == "tool_result":
+                c = b.get("content")
+                if isinstance(c, list):
+                    c = " ".join(str(x.get("text") or "") for x in c if isinstance(x, dict))
+                out.append((str(c or ""), bool(b.get("is_error"))))
+    return out
+
 
 def _record_user_text(d):
     """The human-typed text a record carries, "" for everything else. Three shapes hold it:
@@ -1793,6 +1819,31 @@ def _extract_lesson_candidates(scan):
                         "category": "answer-note",
                     })
 
+        # 8. 0.13.13 (Task 4): guard-block — a hook/permission denial surfacing in an
+        #    ERRORED tool result, or a permission-rule denial record (user-rejected is the
+        #    user's own choice, not a guard lesson). Errored-only: a successful Read of a
+        #    playbook that documents the word BLOCKED is a quotation, not a denial (measured:
+        #    af94571f lines 124/331 are non-errored reads that match the bare pattern).
+        #    One candidate per record even when both fire.
+        guard_hit = False
+        for text, err in _tool_result_texts(d):
+            if err and _LESSON_GUARD_BLOCK.search(text):
+                candidates.append({
+                    "type": "guard-block",
+                    "line": line_num,
+                    "excerpt": text[:160].replace("\n", " ⏎ "),
+                    "category": "guard-block",
+                })
+                guard_hit = True
+                break
+        if not guard_hit and d.get("toolDenialKind") == "permission-rule":
+            candidates.append({
+                "type": "guard-block",
+                "line": line_num,
+                "excerpt": f"permission-rule denial ({d.get('toolName') or 'tool'})"[:160],
+                "category": "guard-block",
+            })
+
     return candidates
 
 
@@ -1841,6 +1892,7 @@ def lessons(paths):
     c_dec = counts.get("decision", 0)
     c_self = counts.get("self-correction", 0)
     c_schema = counts.get("schema-error", 0)
+    c_guard = counts.get("guard-block", 0)
     total = len(all_candidates)
 
     # 0.13.6 (obs 0083/0050): a class zero is only a finding when the self-test corpus can
@@ -1854,20 +1906,21 @@ def lessons(paths):
         zeros = ", ".join(f"{label}={cfmt(cls, 0)}" for cls, label in (
             ("correction", "corrections"), ("retry-after-fail", "retries"),
             ("decision", "decisions"), ("self-correction", "self-corrections"),
-            ("schema-error", "schema-errors")))
+            ("schema-error", "schema-errors"), ("guard-block", "guard-blocks")))
         print(f"  (none) — per-class zeros: {zeros}"
               + ("" if certified else "  [no self-test corpus: every zero is UNKNOWN]"))
         return 0
 
     # Summary line the main skill reads
-    print(f"lessons: {total} candidates ({cfmt('correction', c_corr)} corrections, {cfmt('retry-after-fail', c_retry)} retries, {cfmt('decision', c_dec)} decisions, {cfmt('self-correction', c_self)} self-corrections, {cfmt('schema-error', c_schema)} schema-errors)")
+    print(f"lessons: {total} candidates ({cfmt('correction', c_corr)} corrections, {cfmt('retry-after-fail', c_retry)} retries, {cfmt('decision', c_dec)} decisions, {cfmt('self-correction', c_self)} self-corrections, {cfmt('schema-error', c_schema)} schema-errors, {cfmt('guard-block', c_guard)} guard-blocks)")
 
     # Group by type for display
     by_type = collections.defaultdict(list)
     for c in all_candidates:
         by_type[c["type"]].append(c)
 
-    for typ in ("correction", "retry-after-fail", "decision", "self-correction", "schema-error"):
+    for typ in ("correction", "retry-after-fail", "decision", "self-correction", "schema-error",
+                "guard-block"):
         if typ not in by_type:
             continue
         print(f"\n  [{typ.upper()}]")
@@ -1878,7 +1931,7 @@ def lessons(paths):
 
     # Final line for the main skill
     if total > 0:
-        print(f"\n{total} lesson candidates found ({cfmt('correction', c_corr)} corrections, {cfmt('retry-after-fail', c_retry)} retries, {cfmt('decision', c_dec)} decisions, {cfmt('self-correction', c_self)} self-corrections) — run harvest-lessons? (~{total * 1.5:.0f}K budgeted)")
+        print(f"\n{total} lesson candidates found ({cfmt('correction', c_corr)} corrections, {cfmt('retry-after-fail', c_retry)} retries, {cfmt('decision', c_dec)} decisions, {cfmt('self-correction', c_self)} self-corrections, {cfmt('guard-block', c_guard)} guard-blocks) — run harvest-lessons? (~{total * 1.5:.0f}K budgeted)")
 
     return 0
 

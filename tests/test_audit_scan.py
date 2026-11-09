@@ -1266,12 +1266,13 @@ r = subprocess.run([sys.executable, SCRIPT, "--self-test"],
 eq(r.returncode, 0, "--self-test exits 0")
 check("self-test" in (r.stdout + r.stderr).lower(), "the self-test output names itself",
       (r.stdout + r.stderr)[-300:])
-# 0.13.6 (obs 0083): the corpus must fire ALL FIVE reported classes — text lines plus the
+# 0.13.6 (obs 0083): the corpus must fire ALL reported classes — text lines plus the
 # lessons-scenarios/*.jsonl record scenarios — or a zero in an uncovered class would print
-# as a real 0 in --lessons.
-check("5 classes" in (r.stdout + r.stderr), "--self-test fires across all 5 reported classes",
+# as a real 0 in --lessons. 0.13.13: six classes now (guard-block added).
+check("6 classes" in (r.stdout + r.stderr), "--self-test fires across all 6 reported classes",
       (r.stdout + r.stderr)[-300:])
-for cls in ("correction", "retry-after-fail", "decision", "self-correction", "schema-error"):
+for cls in ("correction", "retry-after-fail", "decision", "self-correction", "schema-error",
+            "guard-block"):
     check(cls in (r.stdout + r.stderr), f"--self-test names the certified {cls} class",
           (r.stdout + r.stderr)[-300:])
 
@@ -1475,6 +1476,63 @@ eq(A._is_pasted_output(""), False, "pasted: empty -> False")
 eq(A._is_skill_injection("Base directory for this skill: /x"), True, "skill-injection prefix detected")
 eq(A._is_skill_injection("the base directory for this skill is documented"), False,
    "no false skill-injection on prose")
+
+# --------------------------------------------------------------------------- 0.13.13 Task 4: guard-block
+print("== 0.13.13 Task 4: hook/permission denials surface as guard-block candidates ==")
+
+# POS: a PreToolUse hook BLOCK inside a tool_result block (real shape, af94571f line 95)
+recs = [tu("g1", "Bash", {"command": "git branch -D unmerged"}, 0),
+        {"type": "user", "timestamp": "2026-11-09T03:05:00Z", "sessionId": "t4",
+         "toolDenialKind": "permission-rule",
+         "message": {"role": "user", "content": [
+             {"type": "tool_result", "tool_use_id": "g1", "is_error": True,
+              "content": "PreToolUse:Bash hook error: watch-your-step: BLOCKED — this branch deletion would leave commits unreachable"}]}}]
+c = cands(recs)
+check([x["type"] for x in c].count("guard-block") == 1,
+      "Task 4: a hook BLOCK in a tool_result block fires guard-block exactly once (text + field dedupe)",
+      f"got={[x['type'] for x in c]}")
+
+# POS: a permission-rule denial record whose result text does not match the patterns
+recs = [{"type": "user", "timestamp": "2026-11-09T03:05:01Z", "sessionId": "t4",
+         "toolDenialKind": "permission-rule", "toolName": "Bash",
+         "message": {"role": "user", "content": [
+             {"type": "tool_result", "tool_use_id": "zz", "is_error": True, "content": "denied"}]}}]
+c = cands(recs)
+check(any(x["type"] == "guard-block" for x in c),
+      "Task 4: a permission-rule denial record fires guard-block even without pattern text")
+
+# NEG: user-rejected is the user's own choice, not a guard lesson
+recs = [{"type": "user", "timestamp": "2026-11-09T03:05:02Z", "sessionId": "t4",
+         "toolDenialKind": "user-rejected",
+         "message": {"role": "user", "content": [
+             {"type": "tool_result", "tool_use_id": "zz2", "is_error": True, "content": "denied"}]}}]
+check(not any(x["type"] == "guard-block" for x in cands(recs)),
+      "Task 4 MUSTNOT: user-rejected is not a guard-block")
+
+# NEG: the word BLOCKED in ASSISTANT PROSE is not a guard-block (only tool results are scanned)
+recs = [{"type": "assistant", "timestamp": "2026-11-09T03:05:03Z", "sessionId": "t4",
+         "message": {"content": [{"type": "text", "text": "the command was BLOCKED by the hook"}]}}]
+check(not any(x["type"] == "guard-block" for x in cands(recs)),
+      "Task 4 MUSTNOT: BLOCKED in assistant prose is not a guard-block")
+
+# NEG: an ordinary successful tool result is not a guard-block
+recs = [tu("ok1", "Bash", {"command": "ls"}, 1),
+        tr_block("ok1", "file1\nfile2", False, 1)]
+check(not any(x["type"] == "guard-block" for x in cands(recs)),
+      "Task 4 MUSTNOT: a clean tool_result is not a guard-block")
+
+# NEG: a NON-errored result that merely quotes denial wording (a Read of a playbook
+# documenting the BLOCKED word — af94571f lines 124/331) is not a guard-block
+recs = [tu("rd1", "Read", {"file_path": "/x/playbook.md"}, 2),
+        tr_block("rd1", "the watch-your-step hook prints BLOCKED when it stops a command", False, 2)]
+check(not any(x["type"] == "guard-block" for x in cands(recs)),
+      "Task 4 MUSTNOT: a non-errored result quoting 'BLOCKED' is not a guard-block")
+
+# POS legacy: a flat top-level tool_result whose text is a permission denial
+recs = [{"type": "tool_result", "timestamp": "2026-11-09T03:05:04Z", "sessionId": "t4",
+         "tool": "Bash", "isError": True, "error": "permission denied by rule"}]
+check(any(x["type"] == "guard-block" for x in cands(recs)),
+      "Task 4: legacy top-level tool_result with denial text fires guard-block")
 
 print()
 if _fail:
