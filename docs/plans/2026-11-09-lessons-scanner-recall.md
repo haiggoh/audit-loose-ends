@@ -265,3 +265,12 @@ Confirm you stopped at the release boundary and touched no memory/CLAUDE.md file
   af94571f delta: 4→10 candidates (retries 0→4, decisions 0→2 incl. line 830). Ruling: retry
   candidate line = the retrying call; compound retries pair on the first subcommand only
   (`git add X && git commit` targets "git add") — accepted heuristic limit, recorded here.
+- 2026-11-09 ~03:00 — Task 2 DONE: `_answer_texts` reads toolUseResult answers + annotation
+  `notes` (not `preview`); they enter the same correction pool/dedupe as typed prompts
+  (category answer-note); `look again` added to _LESSON_ADVICE (menu-survey correction, obs 0098
+  recurrence, user-supplied example 2026-11-09). Discriminant: self-test on unmodified code
+  missed the new MUST line + correction--answer-note scenario. Green: suite exit=0,
+  self-test 24/5 exit=0. Mutation: notes extraction disabled -> _answer_texts unit test red;
+  restored. Validator dispatch: 4/4 attempts timed out (gemini + 3 nvidia) at ~02:55 —
+  user confirmed nvidia is saturated by 7 concurrent sessions; re-dispatch planned with a
+  no-nvidia FA_DISPATCH_PREFS.

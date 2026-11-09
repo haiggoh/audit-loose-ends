@@ -1306,7 +1306,10 @@ _LESSON_ADVICE = re.compile(r"\b(?:should\s+not|should\s+either|should\s+survive
                             r"we\s+need\s+to|follow\s+up\s+with|does\s+nothing\s+to|you\s+should|"
                             r"can(?:not|'t)\s+be\s+ignored|(?:must|has)\s+to\s+be|must\s+be)\b"
                             r"|\bneither\b[^.\n]{0,80}?\b(?:should|must)\b"
-                            r"|\bplease\s+(?:re-?check|double-?check|verify|reconcile)\b", re.I)
+                            r"|\bplease\s+(?:re-?check|double-?check|verify|reconcile)\b"
+                            # 0.13.13 (Task 2, obs 0098 recurrence): "look again, …" is a redirect
+                            # shape that carries no contradiction word — measured on the menu survey.
+                            r"|\blook\s+again\b", re.I)
 _LESSON_CLARITY = re.compile(r"\b(?:i'?m\s+sorry|what\s+exactly|what\s+do\s+you\s+mean|"
                              r"please\s+(?:inform|explain|clarify|elaborate)|i'?m\s+confused|"
                              r"not\s+sure\s+what\s+you\s+mean)\b", re.I)
@@ -1486,6 +1489,33 @@ def _tool_input_key(name, inp):
     if name == "Bash":
         return str(inp.get("command") or "")
     return json.dumps(inp, sort_keys=True, default=str)
+
+
+def _answer_texts(d):
+    """Answer + notes text an answered AskUserQuestion carries on its user record's toolUseResult
+    (obs 0098 recurrence 2026-11-08: the session's best correction lived in an answer's `notes`
+    and the scanner never read it). answers: dict question -> answer (or a list); annotations:
+    dict question -> {"notes": …, "preview": …} or a bare string. Only `notes` is read from
+    annotations — `preview` is the option UI the user saw, not their own words."""
+    out = []
+    tr = d.get("toolUseResult")
+    if not isinstance(tr, dict):
+        return out
+    ans = tr.get("answers")
+    if isinstance(ans, dict):
+        out.extend(str(v) for v in ans.values() if isinstance(v, (str, int)))
+    elif isinstance(ans, list):
+        out.extend(str(v) for v in ans if isinstance(v, (str, int)))
+    ann = tr.get("annotations")
+    if isinstance(ann, dict):
+        for v in ann.values():
+            if isinstance(v, str):
+                out.append(v)
+            elif isinstance(v, dict):
+                n = v.get("notes")
+                if isinstance(n, str):
+                    out.append(n)
+    return out
 
 
 def _extract_lesson_candidates(scan):
@@ -1709,6 +1739,20 @@ def _extract_lesson_candidates(scan):
                         "line": line_num,
                         "excerpt": f"AskUserQuestion: {choice}"[:160],
                         "category": "user-decision",
+                    })
+            # 0.13.13 (Task 2): answers and annotation notes are USER text — feed them through
+            # the same correction pool (and dedupe set) as typed prompts.
+            for text in _answer_texts(d):
+                key = " ".join(text[:160].split())
+                if not key or key in seen_prompts:
+                    continue
+                seen_prompts.add(key)
+                if _is_correction_prompt(text[:MAX_PROMPT]):
+                    candidates.append({
+                        "type": "correction",
+                        "line": line_num,
+                        "excerpt": text[:160].replace("\n", " ⏎ "),
+                        "category": "answer-note",
                     })
 
     return candidates

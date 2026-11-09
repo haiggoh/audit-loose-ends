@@ -1383,6 +1383,52 @@ c = cands(recs)
 check(c == [], "an errored tool_result block with no matching tool_use is ignored, not a crash",
       f"got={c}")
 
+# --------------------------------------------------------------------------- 0.13.13 Task 2: answers + notes are user text
+print("== 0.13.13 Task 2: AskUserQuestion answers AND annotation notes enter the correction pool ==")
+
+def tr_answers(tid, answers, annotations, n=0):
+    return {"type": "user", "timestamp": f"2026-11-09T03:02:{n:02d}Z", "sessionId": "t2",
+            "message": {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": tid, "content": "Your questions have been answered."}]},
+            "toolUseResult": {"questions": [{"question": "Q?"}], "answers": answers,
+                              "annotations": annotations}}
+
+# unit: _answer_texts shape handling
+eq(A._answer_texts({"toolUseResult": {"answers": {"Q?": "Option A"},
+                                       "annotations": {"Q?": {"notes": "note text", "preview": "UI"}}}}),
+   ["Option A", "note text"], "_answer_texts reads answers values + annotation notes (not preview)")
+eq(A._answer_texts({"toolUseResult": {"answers": ["Option A"], "annotations": {"Q?": "bare string"}}}),
+   ["Option A", "bare string"], "_answer_texts handles list answers and bare-string annotations")
+eq(A._answer_texts({"toolUseResult": {"answers": {}, "annotations": {}}}), [],
+   "_answer_texts: empty answers/annotations -> []")
+eq(A._answer_texts({"type": "user", "message": {"content": "hi"}}), [],
+   "_answer_texts: no toolUseResult -> []")
+
+# POS: a correction living in an answer's NOTES fires correction (and the decision fires too)
+recs = [tu("q1", "AskUserQuestion", {"questions": [{"question": "Do those have menus?"}]}, 0),
+        tr_answers("q1", {"Do those have menus?": "No"},
+                   {"Do those have menus?": {"notes": "look again, several of those do have interactive menus"}})]
+c = cands(recs)
+check(any(x["type"] == "correction" and x["category"] == "answer-note" for x in c),
+      "Task 2: a correction in an answer's notes fires a correction candidate",
+      f"got={[(x['type'], x['category']) for x in c]}")
+check(any(x["type"] == "decision" for x in c), "Task 2: the same record still fires the decision")
+
+# NEG: a plain option pick is a decision only, never a correction
+recs = [tu("q2", "AskUserQuestion", {"questions": [{"question": "Q?"}]}, 0),
+        tr_answers("q2", {"Q?": "Option A"}, {})]
+c = cands(recs)
+check(any(x["type"] == "decision" for x in c), "Task 2 MUST: plain pick fires decision")
+check(not any(x["type"] == "correction" for x in c),
+      "Task 2 MUSTNOT: a plain option pick fires NO correction", f"got={[x['type'] for x in c]}")
+
+# NEG: a neutral note fires nothing
+recs = [tu("q3", "AskUserQuestion", {"questions": [{"question": "Q?"}]}, 0),
+        tr_answers("q3", {"Q?": "Option A"}, {"Q?": {"notes": "fine, go ahead with that"}})]
+c = cands(recs)
+check(not any(x["type"] == "correction" for x in c),
+      "Task 2 MUSTNOT: a neutral note fires no correction", f"got={[x['type'] for x in c]}")
+
 print()
 if _fail:
     print(f"FAILURES: {_fail}")

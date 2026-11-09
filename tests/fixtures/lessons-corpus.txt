@@ -35,3 +35,7 @@ MUST correction :: please re-check the diff and reconcile old vs new before ship
 MUSTNOT :: we should probably bump the version before writing the changelog entry
 MUSTNOT :: the harness re-records the latest prompt on many later lines
 MUSTNOT :: we discussed the build plan already, moving on to the release
+#
+# 0.13.13 (Task 2, obs 0098 recurrence 2026-11-08): the menu-survey correction lived in an
+# AskUserQuestion answer's notes — "look again" is a redirect shape even without no/wrong.
+MUST correction :: look again, several of those do have interactive menus
