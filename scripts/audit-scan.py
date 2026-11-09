@@ -1449,6 +1449,29 @@ def _self_test_corpus(corpus_path):
         for fn in sorted(os.listdir(scen_dir)):
             if not fn.endswith(".jsonl"):
                 continue
+            # 0.13.13 (Task 7): a golden--* scenario is a recall assertion, not a class probe —
+            # synthetic records replaying a real session's lesson shapes (GOLD-L* markers,
+            # expected class per marker) and false-positive shapes (GOLDFP* markers that must
+            # stay silent). >=4/5 lessons must fire with the right class.
+            if fn.startswith("golden--"):
+                scan = Scan(os.path.join(scen_dir, fn)).run()
+                got = _extract_lesson_candidates(scan)
+                by_class = collections.defaultdict(list)
+                for c in got:
+                    by_class[c["type"]].append(c["excerpt"])
+                want = {"GOLD-L1": "retry-after-fail", "GOLD-L2": "retry-after-fail",
+                        "GOLD-L3": "guard-block", "GOLD-L4": "self-correction",
+                        "GOLD-L5": "decision"}
+                fired_n = sum(1 for m, cls in want.items()
+                              if any(m in e for e in by_class.get(cls, [])))
+                fired += 1
+                fired_classes.update(by_class)
+                if fired_n < 4:
+                    misses.append(f"scenario {fn}: golden recall {fired_n}/5 (want >=4/5)")
+                for fp in ("GOLDFP1", "GOLDFP2"):
+                    if any(fp in e for exs in by_class.values() for e in exs):
+                        misses.append(f"scenario {fn}: false positive {fp} fired")
+                continue
             cls = fn[:-len(".jsonl")].split("--")[0]
             if cls not in _LESSON_ALL_CLASSES:
                 misses.append(f"scenario {fn}: unknown class {cls!r} (want one of {_LESSON_ALL_CLASSES})")

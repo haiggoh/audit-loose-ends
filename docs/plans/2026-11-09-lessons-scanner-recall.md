@@ -310,3 +310,9 @@ Confirm you stopped at the release boundary and touched no memory/CLAUDE.md file
   -> no gap (correct per the 0-near wording). Unit fixtures both ways (gap fires / suppressed
   near / no writes / Read-is-not-a-write). Suite exit=0, self-test exit=0. Mutation: gap
   condition inverted -> both gap tests red; restored.
+- 2026-11-09 ~04:20 — Task 7 DONE: golden--recall-af94571f.jsonl (synthetic, markers GOLD-L1..L5
+  + GOLDFP1/2, no real text; redact-secret --scan-only clean on all 6 fixture files). Direct
+  extractor run: 5/5 lessons fire with the right classes (2 retry-after-fail, 1 decision,
+  1 self-correction, 1 guard-block), both FPs silent. _self_test_corpus special-cases
+  golden--*: asserts >=4/5 with right class + both GOLDFP silent. self-test 33/6 exit=0.
+  Mutation: retry window killed -> "golden recall 3/5" miss, red; restored.
