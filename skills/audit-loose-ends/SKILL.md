@@ -37,7 +37,8 @@ the command may have failed or only named the path; confirm those before acting 
 **Lesson candidates.** The scanner prints a `lessons: N candidates (…)` summary line; if N>0, offer
 harvest-lessons once (~N×1.5K budgeted). Since 0.13.6 user turns are read from `last-prompt`, raw
 `user`, and mid-turn `queue-operation` records alike, and a zero in a class the self-test corpus
-cannot fire prints UNKNOWN, not 0. `--self-test` must fire all five reported classes.
+cannot fire prints UNKNOWN, not 0. `--self-test` must fire all six reported classes
+(correction, retry-after-fail, decision, self-correction, schema-error, guard-block).
 
 **Heredoc bodies.** Since 0.11.0 a write CALL inside an interpreter heredoc is listed, tagged
 *(inside a heredoc body)*; a path merely NAMED in the body is not. Still blind: a script written to

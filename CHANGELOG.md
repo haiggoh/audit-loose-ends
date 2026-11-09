@@ -1,5 +1,38 @@
 # Changelog
 
+## [0.13.13] — 2026-11-09 — lessons scanner recall + precision (plan docs/plans/2026-11-09-lessons-scanner-recall.md)
+
+- **Fixed:** the structural lesson classes (`retry-after-fail`, `decision`) read only
+  top-level `tool_result` records — a shape real transcripts never contain (af94571f: 0
+  top-level vs 171 blocks; a 400-file sweep found 0) — so `--self-test` was green while both
+  classes were inert on every real session. The extractor now pairs assistant `tool_use`
+  blocks with the `tool_result` blocks inside the following `user` records by `tool_use_id`
+  (retry-after-fail = same tool+target with different input within the next 3 tool calls;
+  Bash target = first word plus the git subcommand; Edit/Write target = file_path), and reads
+  AskUserQuestion `toolUseResult.answers` for decisions. The legacy top-level shape still
+  fires (compatibility).
+- **Added:** `guard-block` class — hook/permission denials in ERRORED tool results
+  (`PreToolUse` / `hook error` / `BLOCKED` / `permission denied` / `denied by rule|hook` /
+  `watch-your-step:`) plus `toolDenialKind=permission-rule` records; AskUserQuestion answer
+  texts AND annotation `notes` now enter the correction pool (`look again` redirect shape
+  included); RECALL GAP under GAPS when lesson-shaped durable writes (memory/observation-log
+  *.md, playbook Pitfalls edits) have no candidate within ±50 records; golden recall scenario
+  `golden--recall-af94571f.jsonl` asserting ≥4/5 planted lessons fire with the right class and
+  both planted false positives stay silent; 0087 partial-agreement correction shapes.
+- **Changed:** precision gate `_is_correction_text` — skill-injection bodies, ≥60%
+  pasted-output turns, and `re.compile(`/`_LESSON_` harvester self-quotation no longer fire
+  CORRECTION (af94571f lines 25/511 now silent); self-correction vocabulary widened (landed on
+  the wrong / that's my bug / the cause was / root cause / looks wrong / false positive /
+  re-extract / already true before / could not have failed), owned-failure pairing kept so
+  neutral prose stays silent.
+- Tests: 5 new block-shape/golden scenario fixtures + corpus MUST/MUSTNOT lines, unit tests
+  with planted positives and negatives, every new predicate mutation-checked. Full parallel
+  suite green; `--self-test` 33 lines/scenarios across 6 classes. Measured on af94571f:
+  4 candidates (3 corrections + 1 schema-error, all false-positive-shaped) → 11 (4 retries,
+  2 decisions incl. line 830, 2 self-corrections incl. line 1054, 1 guard-block at line 95,
+  1 schema-error; lines 25/511 silent). Deferred: waypoint point 0063 (unbacked
+  "tracked on waypoints" GAPS flag) — recorded on the waypoint.
+
 ## [0.13.12] — 2026-11-03 — memory-index-audit resolves the memory dir from the session, not cwd
 
 - **Fixed:** `scripts/memory-index-audit.py` now derives the default project dir from

@@ -316,3 +316,12 @@ Confirm you stopped at the release boundary and touched no memory/CLAUDE.md file
   1 self-correction, 1 guard-block), both FPs silent. _self_test_corpus special-cases
   golden--*: asserts >=4/5 with right class + both GOLDFP silent. self-test 33/6 exit=0.
   Mutation: retry window killed -> "golden recall 3/5" miss, red; restored.
+- 2026-11-09 ~04:30 — Task 8 DEFERRED (per plan: Tasks 1–7 green, ship path prioritised): waypoint
+  point 0063 (GAPS flag for unbacked "tracked on|on waypoints" claims with no waypoints.py
+  add/edit in the session) remains open on waypoint audit-scan-classifier-hardening.
+- 2026-11-09 ~04:35 — Task 9 DONE: CHANGELOG ## [0.13.13] entry (Fixed/Added/Changed, matches
+  0.13.12 style); SKILL.md class counts updated to six (audit-loose-ends + harvest-lessons);
+  rtc-ship.sh --bump-versions . 0.13.13 -> plugin.json + CHANGELOG agree, --versions-only
+  ALL PASS exit=0; full parallel suite on this tree exit=0 (463 ok), --self-test 33/6 exit=0.
+  Whole-branch validator dispatch launched (no-nvidia prefs /tmp/prefs-nonnvidia.json, no role
+  per user 2026-11-09); verdict recorded at ship commit.
