@@ -240,3 +240,19 @@ Confirm you stopped at the release boundary and touched no memory/CLAUDE.md file
 
 - 2026-11-09 02:00 — plan written (cloud Opus 5.5). Root cause confirmed live: structural lesson classes
   read only top-level tool_result records (0 in real transcripts).
+- 2026-11-09 ~02:10 — Receipt 0 (Phase 0, read-only, all verified by running): (2) worktree clean at
+  3b4e0dc on 485c229; main repo `~/ClaudeWorkspace/audit-loose-ends` on `main`, clean. (3) baseline suite
+  via rtc-ship.json test_cmd (`… | parallel -j 12`) → exit=0, ALL PASS, exit captured inside the
+  command, full log /tmp/ale-baseline-tests.log. (4) root cause re-proved on af94571f: top-level
+  tool_result records = 0, tool_result blocks inside user records = 171. (5) baseline
+  `--lessons af94571f` exit=0 → 4 candidates: corrections at lines 25, 511, 1263, schema-error at 1360,
+  0 retries / 0 decisions / 0 self-corrections (transcript grew since the 02:00 snapshot's 2
+  candidates: 1263 = the user's own quoted prompt, 1360 = pasted output — both more false positives);
+  `--self-test` exit=0, 20 lines/scenarios fired across 5 classes. (6) observed shapes: user-record
+  tool_result block keys = type/tool_use_id/content (+is_error when true), content is str or list of
+  {type,text}; assistant tool_use block = type/id/name/input; AskUserQuestion answer = user record
+  with top-level toolUseResult={questions, answers:{q→a}, annotations} AND a tool_result block
+  "Your questions have been answered: …". Also: waypoint audit-scan-classifier-hardening read in full;
+  skill-updates/2026-11-06/{audit-loose-ends,harvest-lessons} LOCATED under
+  ~/.claude/skill-observations/; denial wording observed = `🥾 watch-your-step: ✖ BLOCKED — …` inside
+  Bash tool_result content, plus top-level `toolDenialKind` records (counted in s.denials).
