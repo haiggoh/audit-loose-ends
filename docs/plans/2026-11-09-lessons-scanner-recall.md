@@ -274,3 +274,14 @@ Confirm you stopped at the release boundary and touched no memory/CLAUDE.md file
   restored. Validator dispatch: 4/4 attempts timed out (gemini + 3 nvidia) at ~02:55 —
   user confirmed nvidia is saturated by 7 concurrent sessions; re-dispatch planned with a
   no-nvidia FA_DISPATCH_PREFS.
+- 2026-11-09 ~03:35 — Task 3 DONE: correction GATE `_is_correction_text` (skill-injection prefix,
+  pasted-output >=60% indented/box-drawn lines — calibrated on af94571f line 25 share 0.94 —
+  and 0070 self-quotation re.compile(/_LESSON_*) wraps the vocabulary; corpus predicate now
+  tests the gate; _LESSON_PARTIAL adds 0087 shapes (except for / agree…except / I'd (much)
+  rather). af94571f: corrections 3->1 — lines 25 and 511 SILENT (acceptance 3), line 1263
+  remains (accepted: acceptance names 25/511 only; 1263 is a single-line quoted prompt, not
+  pasted/skill-shaped). Ruling: "(much)" in the waypoint means OPTIONAL much — first regex
+  version took it literally and the I'd-rather MUST missed; fixed. Suite exit=0, self-test
+  27/5 exit=0. Mutation: pasted threshold 0.99 -> both pasted tests red; restored.
+  Validator (local-laguna-s, poolside family, no-nvidia prefs, role dropped per user):
+  Tasks 1+2 diff = "clean".

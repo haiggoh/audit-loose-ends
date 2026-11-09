@@ -1313,6 +1313,11 @@ _LESSON_ADVICE = re.compile(r"\b(?:should\s+not|should\s+either|should\s+survive
 _LESSON_CLARITY = re.compile(r"\b(?:i'?m\s+sorry|what\s+exactly|what\s+do\s+you\s+mean|"
                              r"please\s+(?:inform|explain|clarify|elaborate)|i'?m\s+confused|"
                              r"not\s+sure\s+what\s+you\s+mean)\b", re.I)
+# 0.13.13 (Task 3, waypoint 0087): partial agreement is a correction shape — "except for …",
+# "agree with everything except …", "I'd (much) rather …".
+_LESSON_PARTIAL = re.compile(r"\bexcept\s+for\b"
+                             r"|\bagree\w*\s+with\s+(?:everything|all)\s+except\b"
+                             r"|\bi'?d\s+(?:much\s+)?rather\b", re.I)
 
 def _is_correction_prompt(text):
     """Check if a user prompt contains a correction/redirect signal."""
@@ -1326,7 +1331,8 @@ def _is_correction_prompt(text):
     if _LESSON_CORRECTION.search(text):
         return True
     # 0.13.6 (obs 0083): advice- and clarity-shaped turns carry the same signal
-    return bool(_LESSON_ADVICE.search(text) or _LESSON_CLARITY.search(text))
+    return bool(_LESSON_ADVICE.search(text) or _LESSON_CLARITY.search(text)
+                or _LESSON_PARTIAL.search(text))
 
 def _is_self_correction(text):
     """Check if assistant text contains a self-correction signal: a reversal AND an owned
@@ -1337,11 +1343,43 @@ def _is_schema_error(text):
     """Check if text contains a schema validation error signal."""
     return bool(_LESSON_SCHEMA_ERROR.search(text))
 
+# 0.13.13 (Task 3, waypoint 0098): a skill body injected as a user turn starts with the
+# harness's own header — never a correction, whatever advice words its body contains
+# (measured: af94571f line 511, a whole SKILL.md, fired CORRECTION on 0.13.12).
+_SKILL_INJECTION_PREFIX = "Base directory for this skill:"
+
+def _is_skill_injection(text):
+    return text.lstrip()[:len(_SKILL_INJECTION_PREFIX)] == _SKILL_INJECTION_PREFIX
+
+# 0.13.13 (Task 3, waypoint 0098): a user turn that is mostly pasted assistant/harness output
+# — >=60% of its non-empty lines indented >=2 spaces or carrying spinner/box-drawing
+# characters — is a quotation, not a correction. Measured on af94571f line 25: pasted share
+# 0.94. Conservative by construction: the filter only ever SUPPRESSES the correction class.
+def _is_pasted_output(text):
+    lines = [ln for ln in text.splitlines() if ln.strip()]
+    if not lines:
+        return False
+    pasted = sum(1 for ln in lines
+                 if (len(ln) - len(ln.lstrip())) >= 2 or any(ch in ln for ch in "⏺✻─❯│"))
+    return pasted / len(lines) >= 0.6
+
+def _is_correction_text(text):
+    """The production correction GATE. The structural filters (skill injection, pasted
+    output, harvester self-quotation — waypoint 0070: a record naming re.compile( or a
+    _LESSON_ identifier is the harvester quoting its own source) see the WHOLE text, because
+    a pasted document is pasted even when its first MAX_PROMPT chars look plain; the
+    vocabulary predicate still sees only the first MAX_PROMPT chars, as before."""
+    if _is_skill_injection(text) or _is_pasted_output(text):
+        return False
+    if re.search(r"re\.compile\(|_LESSON_[A-Z_]+", text):
+        return False
+    return _is_correction_prompt(text[:MAX_PROMPT])
+
 # The --self-test corpus (obs 0050): a deterministic scanner's zero is only a finding when
 # the scanner can be shown to fire. The corpus lives in tests/fixtures/ so sweeping this
 # repo does not keep re-auditing the fixtures; its magic first line declares it test data.
 _LESSON_CORPUS_CLASSES = {
-    "correction": _is_correction_prompt,
+    "correction": _is_correction_text,   # 0.13.13: the corpus tests the GATE, not the raw predicate
     "self-correction": _is_self_correction,
     "schema-error": _is_schema_error,
 }
@@ -1567,7 +1605,7 @@ def _extract_lesson_candidates(scan):
             key = " ".join(prompt[:160].split())
             if key not in seen_prompts:
                 seen_prompts.add(key)
-                if _is_correction_prompt(prompt[:MAX_PROMPT]):
+                if _is_correction_text(prompt):
                     excerpt = prompt[:160].replace("\n", " ⏎ ")
                     candidates.append({
                         "type": "correction",
@@ -1747,7 +1785,7 @@ def _extract_lesson_candidates(scan):
                 if not key or key in seen_prompts:
                     continue
                 seen_prompts.add(key)
-                if _is_correction_prompt(text[:MAX_PROMPT]):
+                if _is_correction_text(text):
                     candidates.append({
                         "type": "correction",
                         "line": line_num,

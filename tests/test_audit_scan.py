@@ -1429,6 +1429,53 @@ c = cands(recs)
 check(not any(x["type"] == "correction" for x in c),
       "Task 2 MUSTNOT: a neutral note fires no correction", f"got={[x['type'] for x in c]}")
 
+# --------------------------------------------------------------------------- 0.13.13 Task 3: precision
+print("== 0.13.13 Task 3: skill bodies, pasted output, self-quotation (0070), partial agreement (0087) ==")
+
+def lp(text, n=0):
+    return {"type": "last-prompt", "timestamp": f"2026-11-09T03:03:{n:02d}Z", "sessionId": "t3",
+            "lastPrompt": text}
+
+def qop(text, n=0):
+    return {"type": "queue-operation", "operation": "enqueue",
+            "timestamp": f"2026-11-09T03:04:{n:02d}Z", "sessionId": "t3", "content": text}
+
+# NEG 0098: a skill-injection body is not a correction even with advice words inside
+recs = [lp("Base directory for this skill: /x/skills/foo\nwe need to make sure the test fires first")]
+check(not any(x["type"] == "correction" for x in cands(recs)),
+      "Task 3 MUSTNOT (0098): a skill body ('Base directory for this skill:') is never a correction",
+      f"got={[x['type'] for x in cands(recs)]}")
+
+# NEG 0098: a mostly-pasted turn (>=60% indented/box-drawn non-empty lines) is not a correction
+pasted = "no, that output was wrong\n  ⏺ Edit a.py\n  ✻ Compiling\n  ─────────\n  ❯ done\nplain line"
+recs = [lp(pasted)]
+check(not any(x["type"] == "correction" for x in cands(recs)),
+      "Task 3 MUSTNOT (0098): a turn that is >=60% pasted harness output is not a correction")
+# control: the SAME leading correction in a mostly-plain turn still fires
+recs = [lp("no, that output was wrong\nplain one\nplain two\nplain three\nplain four")]
+check(any(x["type"] == "correction" for x in cands(recs)),
+      "Task 3 control: the same correction word in a mostly-plain turn still fires")
+
+# NEG 0070: harvester self-quotation (re.compile( or a _LESSON_ identifier) is not a correction
+recs = [lp("no wait, the _LESSON_ADVICE pattern is built with re.compile( inside the harvester")]
+check(not any(x["type"] == "correction" for x in cands(recs)),
+      "Task 3 MUSTNOT (0070): a record naming re.compile( or _LESSON_* is not a correction")
+
+# POS 0087: partial-agreement shapes fire
+for i, text in enumerate(["I agree with everything except the retention window",
+                          "except for the changelog, the release notes are ready",
+                          "I'd much rather we kept the old flag name"]):
+    check(any(x["type"] == "correction" for x in cands([qop(text, i)])),
+          f"Task 3 (0087): partial agreement fires: {text[:45]!r}")
+
+# unit: the gate helpers
+eq(A._is_pasted_output("no, wrong\n  ⏺ a\n  ✻ b\n  ─ c"), True, "pasted: 3/4 box/indented lines -> True")
+eq(A._is_pasted_output("no, wrong\nplain\nplain\nplain"), False, "pasted: 0/4 -> False")
+eq(A._is_pasted_output(""), False, "pasted: empty -> False")
+eq(A._is_skill_injection("Base directory for this skill: /x"), True, "skill-injection prefix detected")
+eq(A._is_skill_injection("the base directory for this skill is documented"), False,
+   "no false skill-injection on prose")
+
 print()
 if _fail:
     print(f"FAILURES: {_fail}")

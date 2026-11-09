@@ -39,3 +39,15 @@ MUSTNOT :: we discussed the build plan already, moving on to the release
 # 0.13.13 (Task 2, obs 0098 recurrence 2026-11-08): the menu-survey correction lived in an
 # AskUserQuestion answer's notes — "look again" is a redirect shape even without no/wrong.
 MUST correction :: look again, several of those do have interactive menus
+#
+# 0.13.13 (Task 3, waypoint 0098/0070): the GATE in front of the correction predicate —
+# skill-injection bodies, pasted-output turns, and harvester self-quotation are MUSTNOTs
+# even when the raw vocabulary would fire (the second one starts with "no," and would).
+MUSTNOT :: ⏺ Edit a.py ✻ Compiling ───────── ❯ a pasted harness transcript full of box-drawing lines
+MUSTNOT :: no wait, the _LESSON_ADVICE pattern is built with re.compile( inside the harvester
+#
+# 0.13.13 (Task 3, waypoint 0087): partial agreement is a correction shape
+MUST correction :: I agree with everything except the retention window
+MUST correction :: except for the changelog, the release notes are ready
+MUST correction :: I'd much rather we kept the old flag name
+MUSTNOT :: the release shipped on schedule, no exceptions noted
