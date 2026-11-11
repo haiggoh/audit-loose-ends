@@ -138,7 +138,10 @@ tool for a different question, and a much larger artifact.
    points at this step — no duplicated rule.
 
 While reconciling, sweep memories/notes for pending markers (⏳, REMAINING, TODO) not yet tracked as
-waypoints and add them — here in the audit pass, never in a startup hook.
+waypoints and add them — here in the audit pass, never in a startup hook. When a session shipped an
+incident report or postmortem, check it shipped at least its cheapest enforcement artifact (a guard, a
+validation, a test) or an explicit waypoint naming the enforcement work — "report committed" never
+counts as "problem addressed" (memory: report-is-not-a-fix).
 
 ## Finishing an item
 
