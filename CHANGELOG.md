@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.13.14] — 2026-11-12 — unbacked waypoint claims in GAPS, report-is-not-a-fix check
+
+- **Added:** the digest's GAPS section flags an **UNBACKED waypoint claim** — assistant prose
+  saying a follow-up is "tracked on waypoints" / "recorded as a 🧭 waypoint" / "parked on the
+  waypoint" when the session ran no mutating `waypoints.py add|edit|triage|done|reopen` (a
+  read-only `list`/`show` backs nothing). A tracking verb is required in front, so ordinary
+  uses of the word never fire. This is the 0.13.13 deferred remainder (obs 0063). Measured on
+  the 150 most recent real sessions: 46 contained such a claim, 45 were backed, 1 was not.
+- **Added:** the reconciliation sweep checks that an incident report or postmortem shipped
+  its cheapest enforcement artifact or was captured as a waypoint — a report alone fixes
+  nothing (memory `report-is-not-a-fix`).
+- **Fixed:** `tests/test_audit_scan.py` is Pyright-clean — the module-attribute monkeypatches
+  use `setattr`, and the fake args class annotates `session` (5 pre-existing
+  `reportAttributeAccessIssue` errors, no behaviour change).
+
 ## [0.13.13] — 2026-11-09 — lessons scanner recall + precision (plan docs/plans/2026-11-09-lessons-scanner-recall.md)
 
 - **Fixed:** the structural lesson classes (`retry-after-fail`, `decision`) read only
