@@ -582,6 +582,31 @@ _g2 = render([rec_bash("git status --porcelain")])
 check("shell redirect with no tool record" in _g2,
       "GAPS keeps the generic line when no shell write was seen")
 
+# 0063: a report claiming an item is "tracked on waypoints" when the session never ran a
+# waypoints add/edit is an UNBACKED claim — the reader believes a follow-up exists that does not.
+def rec_say(text):
+    return {"type": "assistant", "timestamp": "2026-09-07T10:00:03Z", "sessionId": "test-sess",
+            "message": {"stop_reason": "end_turn", "content": [{"type": "text", "text": text}]}}
+
+_UNBACKED = "UNBACKED waypoint claim"
+check(_UNBACKED in render([rec_say("The flake is tracked on waypoints for a later session.")]),
+      "GAPS flags a 'tracked on waypoints' claim with no waypoints add/edit")
+check(_UNBACKED in render([rec_say("I recorded it as a 🧭 waypoint so it is not lost.")]),
+      "GAPS flags a 'recorded as a waypoint' claim with no waypoints add/edit")
+check(_UNBACKED in render([rec_say("Left this on waypoints."),
+                           rec_bash("waypoints.py list --open")]),
+      "a read-only waypoints list does not back a tracked-on claim")
+check(_UNBACKED not in render([rec_say("The flake is tracked on waypoints."),
+                               rec_bash('waypoints.py add "brief-agents flake" --point x')]),
+      "a claim backed by waypoints add stays silent")
+check(_UNBACKED not in render([rec_say("Done — noted on the waypoint."),
+                               rec_bash("waypoints.py edit foo --point 'more'")]),
+      "a claim backed by waypoints edit stays silent")
+check(_UNBACKED not in render([rec_say("The route passes three waypoints before the summit.")]),
+      "an ordinary use of the word waypoints is not a tracking claim")
+check(_UNBACKED not in render([rec_say("Nothing to record this session.")]),
+      "no claim, no flag")
+
 # A relative path must resolve against the cwd IN EFFECT, not the session's most common one.
 # Found by dogfooding: the digest named cost-tracker/scripts/audit-scan.py, a file in neither
 # repo, because the session's dominant cwd was the other project. Inventing a path is worse than
@@ -622,14 +647,15 @@ os.utime(_other, (1_700_000_000, 1_700_000_000))   # NEWER -> wins on mtime
 
 _saved_projects, _saved_env = A.PROJECTS_DIR, os.environ.get("CLAUDE_CODE_SESSION_ID")
 try:
-    A.PROJECTS_DIR = _sess_tmp
+    setattr(A, "PROJECTS_DIR", _sess_tmp)   # setattr: pyright-clean module monkeypatch
     os.environ["CLAUDE_CODE_SESSION_ID"] = _own_id
 
     check(A.current_session_transcript() == _own,
           "the session's own transcript is found by id across project dirs")
 
     class _Args:
-        file = None; project = None; all_projects = False; session = None
+        file = None; project = None; all_projects = False
+        session: "str | None" = None
         last = 1; since = None; exclude = []
     check(A.find_transcripts(_Args()) == [_own],
           "the DEFAULT selection is this session, not the newer unrelated transcript")
@@ -668,7 +694,7 @@ try:
                                       text=True, timeout=60, env=_no_env).stdout,
           "no warning is invented when the environment has no session id")
 finally:
-    A.PROJECTS_DIR = _saved_projects
+    setattr(A, "PROJECTS_DIR", _saved_projects)   # setattr: pyright-clean module monkeypatch
     if _saved_env is None:
         os.environ.pop("CLAUDE_CODE_SESSION_ID", None)
     else:
@@ -707,7 +733,7 @@ check(A._last_content_ts(_no_ts) is None,
 
 _saved_projects, _saved_env = A.PROJECTS_DIR, os.environ.pop("CLAUDE_CODE_SESSION_ID", None)
 try:
-    A.PROJECTS_DIR = _ct_tmp
+    setattr(A, "PROJECTS_DIR", _ct_tmp)   # setattr: pyright-clean module monkeypatch
     class _CtArgs:
         file = None; project = None; all_projects = True; session = None
         last = 1; since = None; exclude = []
@@ -730,7 +756,7 @@ try:
     check(_picked == [_fresh] and _err.getvalue() == "",
           "no warning when mtime order and content order agree", _err.getvalue())
 finally:
-    A.PROJECTS_DIR = _saved_projects
+    setattr(A, "PROJECTS_DIR", _saved_projects)   # setattr: pyright-clean module monkeypatch
     if _saved_env is not None:
         os.environ["CLAUDE_CODE_SESSION_ID"] = _saved_env
     import shutil; shutil.rmtree(_ct_tmp, ignore_errors=True)

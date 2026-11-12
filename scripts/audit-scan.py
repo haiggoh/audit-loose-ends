@@ -690,6 +690,14 @@ def _mtime_date(f):
 # --------------------------------------------------------------------------- the scan
 
 
+# 0063: "tracked on waypoints" / "recorded as a 🧭 waypoint" / "noted on the waypoint". A tracking
+# VERB is required in front, so ordinary uses of the word ("three waypoints before the summit")
+# never fire.
+_WP_CLAIM = re.compile(
+    r"\b(?:tracked|recorded|logged|filed|captured|noted|left|parked|added|queued)\b"
+    r"[^.\n]{0,30}?\b(?:on|in|as|to)\s+(?:a\s+|the\s+)?(?:🧭\s*)?waypoints?\b", re.I)
+_WP_MUTATE = re.compile(r"\bwaypoints(?:\.py)?\s+(?:add|edit|triage|done|reopen)\b")
+
 class Scan:
     def __init__(self, path):
         self.path = path
@@ -728,6 +736,9 @@ class Scan:
         self.subagents = 0
         self.plugins = set()
         self.skills = set()
+        # 0063: assistant prose claiming a follow-up is "tracked on waypoints". Checked at report
+        # time against the waypoints commands actually run, so an unbacked claim is named in GAPS.
+        self.waypoint_claims = []
 
     # -- per-record handling, ordered by how often each type appears so the common case is cheap
     def feed(self, d):
@@ -796,6 +807,10 @@ class Scan:
             for blk in msg.get("content") or []:
                 if isinstance(blk, dict) and blk.get("type") == "tool_use":
                     self._tool(blk)
+                elif isinstance(blk, dict) and blk.get("type") == "text":
+                    m = _WP_CLAIM.search(str(blk.get("text") or ""))
+                    if m:
+                        self.waypoint_claims.append(m.group(0))
             return
 
         if t == "last-prompt" and d.get("lastPrompt"):
@@ -1217,6 +1232,12 @@ def report(scans, args):
             out.append(f"  · whether the {len(shell_removes)} removed path(s) above are gone NOW "
                        "— a later step may have restored them")
         out.append("  · the session's reasoning or intent — use --quote, or cc-transcript, for that")
+        # 0063: a report saying a follow-up is "tracked on waypoints" is only true if the session
+        # ran a MUTATING waypoints command. A read-only list/show backs nothing.
+        if s.waypoint_claims and not any(_WP_MUTATE.search(x) for x in s.cmds.get("waypoints", [])):
+            out.append(f"  · ⚠️  UNBACKED waypoint claim ×{len(s.waypoint_claims)}: the reply says "
+                       f"\"{redact(s.waypoint_claims[0][:60])}\" but no waypoints")
+            out.append("    add/edit/triage ran this session — the follow-up may not exist")
         if _RED is None:
             out.append("  · ⚠️  redaction was UNAVAILABLE, so quoted text above is unfiltered")
 
