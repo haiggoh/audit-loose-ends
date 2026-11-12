@@ -608,6 +608,16 @@ check(_UNBACKED not in render([rec_say("The docs on waypoints explain the four t
       "'on waypoints' without a tracking verb is not a tracking claim")
 check(_UNBACKED not in render([rec_say("Nothing to record this session.")]),
       "no claim, no flag")
+# Review findings (Le Chonk, 2026-11-12): a NEGATED claim is not a claim, and a mutating command
+# with a flag or a quoted path before the subcommand still backs one.
+check(_UNBACKED not in render([rec_say("It is tracked in Jira, not on waypoints.")]),
+      "a negated claim ('not on waypoints') is not a tracking claim")
+check(_UNBACKED not in render([rec_say("The flake is tracked on waypoints."),
+                               rec_bash('waypoints.py --json add "flake"')]),
+      "a flag between waypoints.py and add still backs the claim")
+check(_UNBACKED not in render([rec_say("The flake is tracked on waypoints."),
+                               rec_bash('python3 "$HOME/bin/waypoints.py" edit foo --point x')]),
+      "a quoted script path before edit still backs the claim")
 
 # A relative path must resolve against the cwd IN EFFECT, not the session's most common one.
 # Found by dogfooding: the digest named cost-tracker/scripts/audit-scan.py, a file in neither

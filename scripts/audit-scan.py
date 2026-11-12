@@ -217,7 +217,9 @@ def _heredoc_write_targets(body):
 
 
 CMD_PATTERNS = [
-    ("waypoints",  re.compile(_CMDPOS + r"waypoints(?:\.py)?\s+(?!--help|-h\b)\S+")),
+    # Also the interpreter form: python3 "$HOME/…/waypoints.py" edit … (quoted path, $VAR prefix).
+    ("waypoints",  re.compile(_CMDPOS + r"(?:python3?\s+[\"']?[\w./~$-]*/)?"
+                              r"waypoints(?:\.py)?[\"']?\s+(?!--help|-h\b)\S+")),
     ("git-commit", re.compile(_CMDPOS + r"git\s[^\n|;&]*\bcommit\b")),
     ("git-push",   re.compile(_CMDPOS + r"git\s[^\n|;&]*\bpush\b")),
     # A tag OPERAND is required. `git tag` / `git tag | tail` LISTS tags and changes nothing;
@@ -696,7 +698,12 @@ def _mtime_date(f):
 _WP_CLAIM = re.compile(
     r"\b(?:tracked|recorded|logged|filed|captured|noted|left|parked|added|queued)\b"
     r"[^.\n]{0,30}?\b(?:on|in|as|to)\s+(?:a\s+|the\s+)?(?:🧭\s*)?waypoints?\b", re.I)
-_WP_MUTATE = re.compile(r"\bwaypoints(?:\.py)?\s+(?:add|edit|triage|done|reopen)\b")
+# A closing quote ("…/waypoints.py" add) and global flags (waypoints.py --json add) may sit between
+# the name and the subcommand; both still mutate the store.
+_WP_MUTATE = re.compile(
+    r"\bwaypoints(?:\.py)?[\"']?(?:\s+--?[\w-]+(?:=\S+)?)*\s+(?:add|edit|triage|done|reopen)\b", re.I)
+# A negation inside the matched span ("tracked in Jira, not on waypoints") inverts the claim.
+_WP_NEG = re.compile(r"\b(?:not|never|no longer|isn't|wasn't|aren't)\b|n't\b", re.I)
 
 class Scan:
     def __init__(self, path):
@@ -808,9 +815,10 @@ class Scan:
                 if isinstance(blk, dict) and blk.get("type") == "tool_use":
                     self._tool(blk)
                 elif isinstance(blk, dict) and blk.get("type") == "text":
-                    m = _WP_CLAIM.search(str(blk.get("text") or ""))
-                    if m:
-                        self.waypoint_claims.append(m.group(0))
+                    for m in _WP_CLAIM.finditer(str(blk.get("text") or "")):
+                        if not _WP_NEG.search(m.group(0)):
+                            self.waypoint_claims.append(m.group(0))
+                            break
             return
 
         if t == "last-prompt" and d.get("lastPrompt"):

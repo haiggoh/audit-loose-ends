@@ -8,6 +8,11 @@
   read-only `list`/`show` backs nothing). A tracking verb is required in front, so ordinary
   uses of the word never fire. This is the 0.13.13 deferred remainder (obs 0063). Measured on
   the 150 most recent real sessions: 46 contained such a claim, 45 were backed, 1 was not.
+  A negated span ("tracked in Jira, not on waypoints") is not a claim, and a global flag or
+  quoted path before the subcommand (`waypoints.py --json add`, `"…/waypoints.py" edit`) still
+  backs one (independent review findings, each planted as a test and mutation-checked).
+- **Fixed:** the WAYPOINTS COMMANDS RUN section now also captures the interpreter form
+  `python3 "$HOME/…/waypoints.py" <subcommand>`; it matched only a bare command before.
 - **Added:** the reconciliation sweep checks that an incident report or postmortem shipped
   its cheapest enforcement artifact or was captured as a waypoint — a report alone fixes
   nothing (memory `report-is-not-a-fix`).
