@@ -604,6 +604,8 @@ check(_UNBACKED not in render([rec_say("Done — noted on the waypoint."),
       "a claim backed by waypoints edit stays silent")
 check(_UNBACKED not in render([rec_say("The route passes three waypoints before the summit.")]),
       "an ordinary use of the word waypoints is not a tracking claim")
+check(_UNBACKED not in render([rec_say("The docs on waypoints explain the four tiers.")]),
+      "'on waypoints' without a tracking verb is not a tracking claim")
 check(_UNBACKED not in render([rec_say("Nothing to record this session.")]),
       "no claim, no flag")
 
