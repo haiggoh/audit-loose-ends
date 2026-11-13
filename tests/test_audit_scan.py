@@ -1658,6 +1658,44 @@ eq(A._lesson_shaped_write_lines(p6), [1, 2, 3],
    "lesson-shaped writes: observation-log delta + memory Edit + playbook Pitfalls edit")
 os.unlink(p6)
 
+# == compound read-only git commands: writes and removals must still be mined ==
+# A compound like `git status --porcelain && echo x > <durable>/waypoints.json` matches
+# GIT_READONLY on its git segment; the early return used to swallow write/remove mining,
+# so the durable write was reported as "changed nothing" and the absence message asserted
+# a FALSE "no write or remove command ran either" (desktop-migration fleet probe 2026-11-13).
+# Shell writes render in their own lower-confidence section, not DURABLE RECORDS MODIFIED.
+_durable = os.path.expanduser("~/Documents/dm-audit-probe/waypoints.json")
+_r = render([
+    {"type": "assistant", "timestamp": "2026-11-13T08:00:01Z", "sessionId": "s",
+     "message": {"content": [{"type": "tool_use", "name": "Bash",
+                              "input": {"command": "git status --porcelain && echo x > " + _durable}}]}},
+])
+check("waypoints.json" in _r, "compound: a write after git status is still mined")
+check("WRITTEN BY A SHELL COMMAND" in _r, "compound: the shell-write section renders")
+check("no write or remove command ran either" not in _r,
+      "compound: the absence message does not lie about writes")
+_r2 = render([
+    {"type": "assistant", "timestamp": "2026-11-13T08:00:02Z", "sessionId": "s",
+     "message": {"content": [{"type": "tool_use", "name": "Bash",
+                              "input": {"command": "git status --porcelain && rm " + _durable}}]}},
+])
+check("REMOVED" in _r2 and "waypoints.json" in _r2.split("REMOVED", 1)[1][:400],
+      "compound: a removal after git status is still mined")
+_r3 = render([
+    {"type": "assistant", "timestamp": "2026-11-13T08:00:03Z", "sessionId": "s",
+     "message": {"content": [{"type": "tool_use", "name": "Bash",
+                              "input": {"command": "git status --porcelain"}}]}},
+])
+check("read-only git" in _r3 and "waypoints.json" not in _r3,
+      "control: a pure read-only git command stays read-only")
+_r4 = render([
+    {"type": "assistant", "timestamp": "2026-11-13T08:00:04Z", "sessionId": "s",
+     "message": {"content": [{"type": "tool_use", "name": "Bash",
+                              "input": {"command": "git status --porcelain && echo scratch > /tmp/o.txt"}}]}},
+])
+check("no write or remove command ran either" not in _r4 and "read-only git" in _r4,
+      "compound: a tmp redirect still counts as a command that ran a write")
+
 print()
 if _fail:
     print(f"FAILURES: {_fail}")

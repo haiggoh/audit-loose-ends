@@ -863,13 +863,23 @@ class Scan:
             repo_dir = _repo_dir(cmd)
             if repo_dir:
                 self.repos.add(canon(repo_dir))
-        if GIT_READONLY.search(probe) and not any(
-                p.search(probe) for k, p in CMD_PATTERNS if k.startswith("git-")):
-            self.readonly_git += 1
-            return
+        # Mine writes/removes BEFORE the read-only classification: a compound like
+        # `git status --porcelain && echo x > ~/.claude/waypoints.json` matches GIT_READONLY
+        # on its git segment, and the early return used to swallow write/remove mining —
+        # the durable write was reported as "changed nothing" while the absence message
+        # asserted a false "no write or remove command ran either" (desktop-migration
+        # fleet probe 2026-11-13). Commands whose mining produced a durable finding are
+        # not counted as read-only git either: "changed nothing" would be false for them.
+        n_before = len(self.shell_writes) + len(self.shell_removes) + len(self.heredoc_writes)
         self._mine_shell_writes(probe, cmd)
         self._mine_shell_removes(probe, cmd)
         self._mine_heredoc_writes(cmd)
+        produced = (len(self.shell_writes) + len(self.shell_removes)
+                    + len(self.heredoc_writes)) > n_before
+        if GIT_READONLY.search(probe) and not produced and not any(
+                p.search(probe) for k, p in CMD_PATTERNS if k.startswith("git-")):
+            self.readonly_git += 1
+            return
         subj = _subject_of(cmd)
         subj_tail = SUBJ_MARK + " ".join(subj.split())[:200] if subj else ""
         if AUTOMATION_READONLY.search(probe):

@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.13.15] — 2026-11-13 — compound read-only git commands no longer swallow writes/removals
+
+- **Fixed:** a compound command whose git segment is read-only (`git status --porcelain &&
+  echo x > ~/Documents/waypoints.json`, `… && rm <record>`) matched `GIT_READONLY` and the
+  early return in `_bash()` skipped `_mine_shell_writes` / `_mine_shell_removes` /
+  `_mine_heredoc_writes` entirely — the durable write or removal was reported as a
+  "read-only git command … changed nothing", and the absence message asserted the FALSE
+  "no write or remove command ran either". Mining now runs BEFORE the read-only
+  classification; a command whose mining produced a durable finding is not counted as
+  read-only git either. Measured end-to-end on a synthetic transcript (desktop-migration
+  fleet Phase-1 probe); a pure `git status` still counts as read-only, and a tmp redirect
+  now truthfully counts as "a write command ran" in the absence message.
+- **Tests:** 5 new checks in `tests/test_audit_scan.py` (write mined, shell-write section
+  renders, truthful absence message, removal mined, pure-git + tmp-redirect controls),
+  red against the pre-fix code, green after.
+
 ## [0.13.14] — 2026-11-12 — unbacked waypoint claims in GAPS, report-is-not-a-fix check
 
 - **Added:** the digest's GAPS section flags an **UNBACKED waypoint claim** — assistant prose
