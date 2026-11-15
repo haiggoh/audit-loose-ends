@@ -27,7 +27,7 @@ PORTABLE = ROOT / "portable"
 ADAPTATION_CLASSES = {"native-unchanged", "mechanical", "qualified-adapter",
                       "reduced-useful", "unsupported", "unknown"}
 EVIDENCE_LEVELS = {"source-inspected", "fixture-tested", "runtime-qualified"}
-KINDS = {"manifest", "skill", "hooks", "hook-script", "script", "scanner-tools"}
+KINDS = {"manifest", "skill", "hooks", "hook-script", "script", "data"}
 REF_RE = re.compile(r"\$\{(CLAUDE_PLUGIN_ROOT|CLAUDE_SKILL_DIR)\}(?:/([^\s\"'\\]+))?")
 
 
@@ -61,7 +61,8 @@ def test_host_to_portable_file_set_is_pinned():
         assert (PORTABLE / s.relative_to(ROOT)).is_file(), f"host skill missing: {s}"
     refs = set()
     for sk in sorted(ROOT.glob("skills/*/SKILL.md")):
-        refs |= set(re.findall(r"\$CLAUDE_PLUGIN_ROOT/scripts/([^\s\"'\\)]+)", sk.read_text(encoding="utf-8")))
+        refs |= set(re.findall(r"\$\{?CLAUDE_PLUGIN_ROOT\}?/scripts/([A-Za-z0-9_.-]+)",
+                               sk.read_text(encoding="utf-8")))
     assert refs, "the skills must reference at least one script"
     for rel in sorted(refs):
         assert (PORTABLE / "scripts" / rel).is_file(), f"skill-referenced script missing: {rel}"
