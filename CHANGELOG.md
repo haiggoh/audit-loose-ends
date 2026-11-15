@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.13.16] — 2026-11-15
+
+### Added — Phase 3 Wave A: committed portable package (COORDINATION C1/C2)
+
+- New `scripts/build-portable.py` (from the reviewed pilot pattern) generates the committed
+  `portable/` package: same-name manifest, BOTH skills (audit-loose-ends + harvest-lessons),
+  the SessionStart nudge hook, and the scripts/ scanner closure (audit-scan,
+  memory-index-audit + its reviewed-stamp data file, observation-log, redact-secret,
+  verify-paths, verify-state, waypoint-reconcile) — stdlib-standalone, invoked via
+  `${CLAUDE_PLUGIN_ROOT}/scripts/`. install/ (host shims), templates/ and tests/ are
+  host-only and stay out. Emits `PORTABLE-BUILD.json` (haiggoh-portable-build/1) and a
+  deterministic `dist/audit-loose-ends-portable.zip`.
+- `tests/test_portable.py` pins freshness, same-name manifest, no `bin/`, the
+  host→portable skill/script set (byte-identical), closure completeness, the C2 schema,
+  deterministic side-effect-free zip. The code-file `../` escape ban ignores ellipses
+  (".../memory/" contains "../" as a substring).
+
 ## [0.13.15] — 2026-11-13 — compound read-only git commands no longer swallow writes/removals
 
 - **Fixed:** a compound command whose git segment is read-only (`git status --porcelain &&

@@ -1,0 +1,97 @@
+{
+  "builder": "scripts/build-portable.py",
+  "builder_version": "1.0.0",
+  "components": [
+    {
+      "adaptation_class": "mechanical",
+      "evidence_level": "source-inspected",
+      "kind": "manifest",
+      "notes": "same name+version as the host manifest; an installed marketplace plugin wins over a synced copy in Code, so no double-run",
+      "path": ".claude-plugin/plugin.json",
+      "surfaces": {
+        "chat": true,
+        "code": true,
+        "cowork": true
+      }
+    },
+    {
+      "adaptation_class": "native-unchanged",
+      "evidence_level": "source-inspected",
+      "kind": "skill",
+      "notes": "reconciliation/lesson-proposal guidance; every command references ${CLAUDE_PLUGIN_ROOT}/scripts/... which resolves inside the package",
+      "path": "skills/audit-loose-ends/SKILL.md",
+      "surfaces": {
+        "chat": true,
+        "code": true,
+        "cowork": true
+      }
+    },
+    {
+      "adaptation_class": "native-unchanged",
+      "evidence_level": "source-inspected",
+      "kind": "skill",
+      "notes": "opt-in sub-skill; same scripts/ references",
+      "path": "skills/harvest-lessons/SKILL.md",
+      "surfaces": {
+        "chat": true,
+        "code": true,
+        "cowork": true
+      }
+    },
+    {
+      "adaptation_class": "mechanical",
+      "evidence_level": "source-inspected",
+      "kind": "hooks",
+      "notes": "Chat ignores plugin hooks, Cowork loads them, Code runs them",
+      "path": "hooks/hooks.json",
+      "surfaces": {
+        "chat": false,
+        "code": true,
+        "cowork": true
+      }
+    },
+    {
+      "adaptation_class": "native-unchanged",
+      "evidence_level": "source-inspected",
+      "kind": "hook-script",
+      "notes": "the end-of-task audit nudge; bash 3.2, stateless",
+      "path": "hooks/nudge.sh",
+      "surfaces": {
+        "chat": false,
+        "code": true,
+        "cowork": true
+      }
+    },
+    {
+      "adaptation_class": "native-unchanged",
+      "evidence_level": "source-inspected",
+      "kind": "scanner-tools",
+      "notes": "audit-scan.py, memory-index-audit.py (+ its reviewed-stamp data file), observation-log.py, redact-secret.py, verify-paths.sh, verify-state.py, waypoint-reconcile.py \u2014 stdlib-standalone, invoked via ${CLAUDE_PLUGIN_ROOT}/scripts/ from the skills",
+      "path": "scripts/",
+      "surfaces": {
+        "chat": true,
+        "code": true,
+        "cowork": true
+      }
+    }
+  ],
+  "files": {
+    ".claude-plugin/plugin.json": "90b210b7196186c4111b2c388f15be9d899e8371e23535c78f14bca5b25ad4ba",
+    "hooks/hooks.json": "c8934e1793d3f85e66ef7a45ccdc645f551421bd75384c2b33b28e723baf4588",
+    "hooks/nudge.sh": "cf1d2b7d67c7609d0295dc1b9c89b6b390dab17dae38106ac123726713e3d852",
+    "scripts/audit-scan.py": "b3276d0e094b327b03bdbc800b66aa28d6a91db730bb6130b95fd3cff87ed626",
+    "scripts/memory-index-audit.py": "ab24846b95c1a51dd4dbf00a60d9e6ffa4003dbf42189f6c6530b0798c30a11a",
+    "scripts/memory-index-reviewed.txt": "1ddc10ba369ed50c6547634b6baf9bdbf131dc4c2293c4dc680b5dda3b117734",
+    "scripts/observation-log.py": "4e05ca2026ca619086a7f7cc76eb0a6d63020d517f58c4fb24ea9f79043e532e",
+    "scripts/redact-secret.py": "8910b2404b71aa5816f9830a8ef33e1cfb4204ddfbc452a425d1f75f48089382",
+    "scripts/verify-paths.sh": "8e0c90af98ce4d90c2375a45a1a68153078c8757f5e2c467bdc7a49fc22b8d12",
+    "scripts/verify-state.py": "ec3cc3848714921919a6fd699406205374bfc3afda17d958c8d12dde13cdf52e",
+    "scripts/waypoint-reconcile.py": "b9fe3e7c0e1c85d5ef8bec08921ab7777f9daccbd0ae22e9af8895ee81436ddc",
+    "skills/audit-loose-ends/SKILL.md": "3c8dc7079f2006e90fe94d91893963f1ed2814058048310c8ebdb737b88b9de3",
+    "skills/harvest-lessons/SKILL.md": "b48826f15e5ae456440d928ca0b42df145b7e4a9d3b654d32b40600a58d4af28"
+  },
+  "schema": "haiggoh-portable-build/1",
+  "source_commit": "7f9e7d6c2b3dd5e6ac1fac7c28b3f6a44b5c7770",
+  "source_repo": "haiggoh/audit-loose-ends",
+  "transform_version": "1"
+}

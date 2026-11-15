@@ -1,0 +1,2197 @@
+#!/usr/bin/env python3
+"""Extract the audit-relevant facts from Claude Code session transcripts, without reading them.
+
+THE PROBLEM THIS SOLVES. The reconciliation pass needs to know what a session actually changed:
+which durable records it touched, what it closed, whether the repos it edited are committed. The
+obvious way to find that out is to resume the session and ask — but a long session's context is
+the single most expensive thing in the system, and resuming a 300k-token one purely to tidy up has
+cost several dollars in one swoop. The facts the audit needs are a few hundred bytes; the context
+they arrive in is megabytes.
+
+So this reads the transcript from OUTSIDE, streaming, and emits a digest. Nothing about the
+session enters a model's context except the digest. The audit then runs in a fresh, cheap session.
+
+WHY NOT THE EXISTING DISTILLER. `cc-transcript` already compacts a transcript, and it is the right
+tool when you need to READ a session — a faithful, line-addressable chronology. It is the wrong
+tool here, and the numbers say so: on a 4.8 MB transcript it produces a 352 KB capsule, roughly
+88k tokens, which is still a dollar or so just to load. This produces a few KB. They are different
+artifacts for different questions: preservation versus reconciliation. When the digest raises a
+question that needs real chronology, that is the moment to reach for the distiller — or for
+`--quote` below.
+
+THE DESIGN THAT MAKES IT CHEAP. Claude Code already records every file it modified as a tiny
+`file-history-delta` record carrying just a path. So the authoritative "what did this session
+change" answer costs one small record per file version — no need to parse the Edit/Write arguments,
+which are the largest payloads in the file and the reason a naive scan would be as expensive as the
+thing it replaces. Tool arguments are read only for the few tools whose ARGUMENTS are themselves
+the fact (a `git commit`, a `waypoints.py done`), and truncated hard even then.
+
+`--quote PATTERN` is the second half of the idea. The digest is a MAP, deliberately too terse to
+answer follow-ups. When it points at something you need to see, quote just that: a regex, a hard
+character budget, and line numbers into the raw file. That is what keeps this cheaper than the
+wrap it replaces — you pay for the one thread you actually pursue instead of the whole session.
+
+READ-ONLY. This never writes to a transcript, a store, or a repo.
+"""
+
+import argparse
+import collections
+import fnmatch
+import glob
+import importlib.util
+import json
+import os
+import re
+import sys
+
+PROJECTS_DIR = os.path.expanduser("~/.claude/projects")
+
+# Hard caps. A digest that can grow without bound defeats the entire purpose -- the failure mode
+# to design against is not "too little detail", it is silently reproducing the transcript.
+MAX_CMD = 160            # chars of any single quoted command, at DISPLAY time
+RAW_CMD_KEEP = 900       # chars of SHELL CODE retained so condense() can reach a
+                         # heredoc subject, which sits on the line AFTER the marker
+MAX_PROMPT = 400         # chars of a quoted user prompt
+MAX_PER_SECTION = 40     # distinct entries listed in any one section before it summarises
+DEFAULT_QUOTE_BUDGET = 4000
+
+# --------------------------------------------------------------------------- classification
+#
+# Ordered most-specific first: the memory directory lives under ~/.claude, so a generic
+# claude-config rule placed earlier would swallow it and the digest would under-report the surface
+# the audit most cares about.
+SURFACES = [
+    ("memory",      ["*/memory/*.md", "*/memory/MEMORY.md"]),
+    ("plans",       ["*/.claude/plans/*", "*/plans/*.md"]),
+    ("waypoints",   ["*/waypoints.json", "*/waypoints-archive.json",
+                     "*/waypoints-journal.jsonl"]),
+    ("claude-md",   ["*/CLAUDE.md", "*/AGENTS.md", "*/.claude/CLAUDE.md"]),
+    ("settings",    ["*/.claude/settings*.json", "*/settings.local.json"]),
+    ("hooks",       ["*/hooks/*", "*/hooks.json"]),
+    ("automation",  ["*/LaunchAgents/*", "*/Library/LaunchAgents/*", "*/crontab*"]),
+    ("scripts",     ["*/.claude/scripts/*", "*/scripts/*"]),
+    ("skills",      ["*/skills/*/SKILL.md"]),
+    ("docs",        ["*.md", "*.txt", "*.rst"]),
+]
+
+# Bash commands whose ARGUMENTS are the audit fact, so they are worth the cost of reading.
+# A command POSITION: start of input, a new line, or just after a shell operator. Anchoring here
+# is what stops the word "launchctl" inside a commit MESSAGE from registering as automation --
+# without it, every commit whose prose mentions a tool lands in that tool's section, and the
+# sections the audit is meant to trust become the noisiest ones in the digest.
+_CMDPOS = r"(?:^|\n|&&|\|\||;|\||\(|`|\$\()\s*(?:sudo\s+)?(?:[\w./~-]*/)?"
+
+
+# --- writes performed by the SHELL rather than by a writing tool --------------------------------
+# A file changed by `cat > f`, a heredoc, `sed -i`, `tee` or `>>` produces NO file-history-delta and
+# NO Write/Edit record, so it was invisible to this scan. MEASURED 2026-09-08: a session that
+# modified three memory files reported one — and the two it missed were the heredoc and the sed.
+#
+# That is the reverse of this tool's whole premise. The scan is documented as being right about what
+# happened while recollection is lossy; here recollection was right and the digest was wrong. Worse,
+# an auto-mode session is INSTRUCTED to prefer sed/heredoc over the Edit tool, so the sessions most
+# likely to be audited this way are exactly the ones it is blindest on.
+#
+# Kept as a SEPARATE, LOWER-CONFIDENCE group rather than merged into the main list: a path appearing
+# in a command string is weaker evidence than a delta record (the command may have failed, been a
+# dry run, or named the path only to read it), and silently mixing the two would trade a false
+# negative for a false positive in the one section the audit acts on.
+_SHELL_WRITE_RES = (
+    # `> path`, `>> path` — but NOT `2>&1`, `>&2`, or a process substitution
+    re.compile(r"(?<![0-9&])>>?\s*(?![&(])([\w./~$-]+)"),
+    # heredoc into a file: `cat > path <<EOF` is caught above; `tee path` is its own form
+    re.compile(_CMDPOS + r"tee\s+(?:-a\s+)?([\w./~$-]+)"),
+    # in-place editors: sed -i, perl -i, and gnu variants
+    re.compile(_CMDPOS + r"(?:sed|perl)\s+(?:-\S+\s+)*-i(?:\s+''|\s+\S*)?\s+(?:-\S+\s+)*(?:'[^']*'|\"[^\"]*\"|\S+)\s+([\w./~$-]+)"),
+    # explicit moves/copies ONTO a durable path
+    re.compile(_CMDPOS + r"(?:mv|cp|install)\s+(?:-\S+\s+)*\S+\s+([\w./~$-]+)"),
+)
+
+# REMOVALS are mined separately from writes, because a deletion is not a write and the
+# write-shaped patterns above cannot match one: `rm <path>` and `mv <durable> <elsewhere>` name a
+# durable path while redirecting nothing. Measured 2026-09-22 — a session that deleted a 37 KB
+# always-loaded AGENTS.md reported "the session changed no tracked file", which is the single
+# worst thing an audit can say about the change it most exists to catch. Kept in its own bucket so
+# the report can say REMOVED rather than implying an edit.
+_SHELL_REMOVE_RES = (
+    # `rm [-flags] path...` — every argument is a target, so all are captured for later splitting
+    re.compile(_CMDPOS + r"rm\s+((?:-\S+\s+)*[\w./~$-]+(?:\s+[\w./~$-]+)*)"),
+    # a move AWAY from a durable path leaves nothing there; the destination is caught above
+    re.compile(_CMDPOS + r"mv\s+(?:-\S+\s+)*([\w./~$-]+)\s+\S+"),
+)
+
+# WRITES FROM INSIDE AN INTERPRETER HEREDOC. `python3 - <<'PY'` whose body does `open(p,'w')` names
+# its target in no shell construct at all, and the prose-masking above deliberately strips bodies,
+# so the path was traceless. MEASURED 2026-09-11: one session reported 4 durable records of 16
+# changed; another listed zero memory files while two had been rewritten. Every miss had this shape.
+#
+# Precision is the whole design. A body that merely MENTIONS a path (a fixture, a docstring, a
+# read) must stay quiet, so a literal is reported only when it reaches a WRITE CALL — directly, or
+# through a variable assigned from it. Bodies are parsed as Python-ish text, which is what nearly
+# every such heredoc in this workflow is; other interpreters get the same treatment for the common
+# `open(...,'w')` / `.write_text` shapes and nothing else.
+_INTERP_HEREDOC_RE = re.compile(
+    r"(?:^|\n|&&|\|\||;|\()\s*(?:python3?|python3\.\d+|node|ruby|perl)\b[^\n<]*<<-?\s*(['\"]?)"
+    r"([A-Za-z_][A-Za-z0-9_]*)\1[^\n]*\n")
+_STR_LIT = r"""(?P<q>['"])(?P<lit>[^'"\s{}]+)(?P=q)"""
+# `x = <rhs>` — the RHS is resolved later from the literals and known variables it contains.
+_ASSIGN_RE = re.compile(r"^\s*(\w+)\s*=\s*(?!=)(.+)$")
+_HD_WRITE_RES = (
+    re.compile(r"\b(\w+)\.write_(?:text|bytes)\("),                       # var.write_text(
+    re.compile(r"\bopen\(\s*(\w+)\s*,\s*['\"][wax]"),                     # open(var, 'w')
+    re.compile(r"\bopen\(\s*" + _STR_LIT + r"\s*,\s*['\"][wax]"),        # open('lit', 'w')
+    re.compile(r"\bPath\(\s*" + _STR_LIT + r"\s*\)\.write_(?:text|bytes)\("),
+    re.compile(r"\bos\.(?:replace|rename)\(\s*[^,]+,\s*(?:(\w+)|" + _STR_LIT + r")\s*\)"),
+    re.compile(r"\bshutil\.(?:copy\w*|move)\(\s*[^,]+,\s*(?:(\w+)|" + _STR_LIT + r")\s*\)"),
+)
+
+_HD_PATH_FUNCS = {"Path", "pathlib.Path", "os.path.join", "os.path.expanduser", "expanduser",
+                  "resolve", "str", "PurePath"}
+
+
+def _hd_eval(rhs, env):
+    """Statically evaluate a path EXPRESSION, or None if it is anything else.
+
+    Accepts only literals, f-strings over known names, known variables and the path constructors
+    in _HD_PATH_FUNCS joined by `/`, `+` or `,`. Any other identifier — `s.replace`, `p.read_text`
+    — makes the whole RHS not-a-path, which is what keeps `s = s.replace("a/b.md", …)` from
+    binding `s` to a path that is never written."""
+    rhs = re.sub(r"(?:pathlib\.)?Path\.home\(\)", '"~"', rhs.strip().rstrip(";"))
+    parts = []
+    for q, lit, ident, punct in re.findall(
+            r"""f?(['"])(.*?)\1|([A-Za-z_]\w*(?:\.\w+)*)|(\S)""", rhs):
+        if q:
+            if not lit or re.search(r"\s", lit):
+                return None
+            lit = re.sub(r"\{(\w+)\}", lambda m: env.get(m.group(1), "\0"), lit)
+            if "\0" in lit or "{" in lit:
+                return None
+            parts.append(lit)
+        elif ident:
+            if ident in env:
+                parts.append(env[ident])
+            elif ident not in _HD_PATH_FUNCS:
+                return None
+        elif punct not in "()/,+.":
+            return None
+    if not parts:
+        return None
+    path = ""
+    for p in parts:
+        path = p if (not path or p.startswith(("/", "~"))) else path.rstrip("/") + "/" + p.lstrip("/")
+    if "/" not in path and not re.search(r"\.\w{1,6}$", path):
+        return None  # a bare word ("w", "utf-8") is not a path
+    return path
+
+
+def _heredoc_write_targets(body):
+    """Paths an interpreter heredoc body WRITES — never ones it only names. See _INTERP_HEREDOC_RE.
+
+    Triple-quoted strings and full-line comments are blanked first: they are where a body carries
+    fixture text and prose, and an `open(x, 'w')` quoted inside one is data, not a call."""
+    body = re.sub(r"('''|\"\"\")(.*?)\1", '""', body, flags=re.S)
+    env, out = {}, []
+    # `;` splits too: `p="x.json"; open(p,"w").write(s)` is the common one-liner shape. A split
+    # inside a string only yields fragments that fail to evaluate, so it costs no precision.
+    for line in re.split(r"\n|;", body):
+        if line.lstrip().startswith("#"):
+            continue
+        for rx in _HD_WRITE_RES:
+            for m in rx.finditer(line):
+                gd = m.groupdict()
+                if gd.get("lit"):
+                    tgt = _hd_eval(gd["q"] + gd["lit"] + gd["q"], env)
+                else:
+                    name = next((g for g in m.groups() if g), None)
+                    tgt = env.get(name)
+                if tgt:
+                    out.append(tgt)
+        am = _ASSIGN_RE.match(line)
+        if am:
+            val = _hd_eval(am.group(2), env)
+            if val is not None:
+                env[am.group(1)] = val
+            else:
+                env.pop(am.group(1), None)  # rebound to a non-path: forget the old binding
+    return out
+
+
+CMD_PATTERNS = [
+    # Also the interpreter form: python3 "$HOME/…/waypoints.py" edit … (quoted path, $VAR prefix).
+    ("waypoints",  re.compile(_CMDPOS + r"(?:python3?\s+[\"']?[\w./~$-]*/)?"
+                              r"waypoints(?:\.py)?[\"']?\s+(?!--help|-h\b)\S+")),
+    ("git-commit", re.compile(_CMDPOS + r"git\s[^\n|;&]*\bcommit\b")),
+    ("git-push",   re.compile(_CMDPOS + r"git\s[^\n|;&]*\bpush\b")),
+    # A tag OPERAND is required. `git tag` / `git tag | tail` LISTS tags and changes nothing;
+    # without this the digest reported a listing as a release tag, complete with `tag |` as the
+    # tag name -- a fabricated fact, which is worse in an audit than a missing one.
+    ("git-tag",    re.compile(_CMDPOS + r"git\s[^\n|;&]*\btag\s+(?:-\S+\s+)*[^\s|;&<>()'\"-]")),
+    ("release",    re.compile(_CMDPOS + r"gh\s+release\s+\w+")),
+    ("automation", re.compile(
+        _CMDPOS + r"(?:launchctl\s+(?:bootstrap|bootout|load|unload|enable|disable|kickstart|"
+                  r"remove|submit|setenv|unsetenv)\b|crontab\s+(?!-l\b)\S)")),
+    ("plugin",     re.compile(_CMDPOS + r"claude\s+plugin\s+\w+")),
+    ("destructive", re.compile(_CMDPOS + r"(?:rm\s+-[rRf]{1,2}f?\s|git\s+push\s+[^\n]*--force|"
+                               r"git\s+reset\s+--hard|DROP\s+TABLE|"
+                               r"waypoints(?:\.py)?\s+rm\s[^\n]*--delete)")),
+]
+
+CAT_PATTERNS = dict(CMD_PATTERNS)
+
+# Read-only git plumbing. Recording `git status` as "git activity" would inflate every digest with
+# the one command that by definition changed nothing.
+AUTOMATION_READONLY = re.compile(
+    _CMDPOS + r"(?:launchctl\s+(?:print|list|dumpstate|procinfo|examine)\b|"
+    r"crontab\s+-l\b)")
+
+# NOTE the boundary placement: a trailing `\b` on the whole group is WRONG, because the
+# alternatives that end at `$` or at a shell operator have no word character to bound against, so
+# they silently never match. `git tag` and `git branch` went uncounted for exactly that reason.
+GIT_READONLY = re.compile(
+    r"\bgit\b[^|;&]*\b(?:(?:status|log|diff|show|rev-parse|rev-list|remote\s+-v)\b"
+    r"|(?:branch|tag)\s*(?:$|(?=[|;&>]))"
+    r"|tag\s+(?:-l\b|--list\b))")
+
+
+# macOS ships /tmp, /var and /etc as symlinks into /private. Claude Code records a tool argument
+# as the user typed it but a file-history path as resolved, so the SAME file arrives spelled two
+# ways -- which made the cross-check report every temp file as both "changed" and "no change
+# record". Normalising the prefix is enough; a full realpath() would be wrong here because the
+# file may no longer exist by the time the scan runs.
+_PREFIX_ALIASES = (("/tmp/", "/private/tmp/"), ("/var/", "/private/var/"), ("/etc/", "/private/etc/"))
+
+
+def canon(path):
+    p = os.path.normpath(str(path))
+    for short, real in _PREFIX_ALIASES:
+        if p.startswith(short):
+            return real + p[len(short):]
+    return p
+
+
+# --- condensing a git command into the fact the audit wants ------------------------------------
+# A real git line in this workflow is a compound: `cd repo && git add -A && git commit -F - <<MSG
+# subject… && git push && git log`. Quoting it whole costs ~160 chars to say one thing, and the
+# same line lands in COMMITS, PUSHES and TAGS looking identical in all three. So each category
+# extracts only its own fact. This is the single biggest lever on digest size after file collapsing.
+_CD_RE = re.compile(r"\bcd\s+(\S+)")
+_MSG_Q_RE = re.compile(r"-m\s+(['\"])(.+?)\1", re.S)
+# The marker is followed by the REST OF ITS LINE (often `&& git log …`); the body starts on the
+# next line. Capture the first non-empty body line, which for a commit is the subject.
+_HEREDOC_RE = re.compile(r"<<-?\s*'?[A-Za-z_][A-Za-z0-9_]*'?[^\n]*\n\s*(\S[^\n]*)")
+_PUSH_RE = re.compile(r"\bpush\b((?:\s+--?\S+)*)\s*(\S+)?\s*(\S+)?")
+_TAG_RE = re.compile(r"\btag\b(?:\s+-\S+)*\s+(\S+)")
+_REL_RE = re.compile(r"\bgh\s+release\s+(\w+)\s+(\S+)?")
+# What is stored per command is the SHELL CODE, with the commit subject appended under this marker.
+# Storing the raw command instead meant a 30-line commit message consumed the whole retention
+# budget and the operative `git push`/`git tag`/`gh release` that followed it was cut off -- the
+# digest then reported "push" with no target and "tag ?" with no version. Found by running this
+# scanner on the session that shipped it.
+SUBJ_MARK = "\n#audit-scan-subject# "
+_SUBJ_MARK_RE = re.compile(re.escape(SUBJ_MARK) + r"(.*)")
+
+
+_HEREDOC_OPEN_RE = re.compile(r"<<-?\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1")
+
+
+def shell_only(cmd):
+    """The command with heredoc BODIES removed.
+
+    Prose reaches a command two ways -- as a heredoc body and as a long quoted argument -- so
+    this also runs `mask_prose`, and callers get one function that answers "which part of this was
+    actually shell code".
+
+    A heredoc body is data, not shell code — and in this workflow it is usually a commit message,
+    which is prose about the very tools being detected. Matching patterns against it is why a
+    commit whose message mentioned `launchctl` was reported as having run launchctl. Stripping the
+    bodies fixes that class of false positive at the source, for every category at once, instead of
+    per-pattern. The body is still available to the subject extractor, which reads the raw command.
+    """
+    if "<<" not in cmd:
+        return mask_prose(cmd)
+    out = []
+    lines = cmd.split("\n")
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        out.append(line)
+        m = _HEREDOC_OPEN_RE.search(line)
+        i += 1
+        if not m:
+            continue
+        tag = m.group(2)
+        # Skip forward to the terminator. An unterminated heredoc (a truncated command) means the
+        # rest is body, which is the safe reading: better to under-detect in data than to
+        # over-detect prose as commands.
+        while i < len(lines) and lines[i].strip() != tag:
+            i += 1
+        i += 1  # drop the terminator line too
+    return mask_prose("\n".join(out))
+
+
+def mask_prose(cmd):
+    """The command with MULTI-LINE quoted DATA blanked out, quote-aware.
+
+    The heredoc pass above only covers prose delivered as a heredoc. The same prose also
+    arrives as a long quoted argument -- `gh release create --notes "..."`, whose body is a
+    changelog describing the very commands being detected. Because the anchor treats the start
+    of a line as a command position, a changelog line beginning "claude plugin update ..."
+    registered as an actual plugin update: two fabricated entries in the digest, found by
+    running this scanner on the session that built it.
+
+    Only regions spanning a NEWLINE are blanked, because those are the prose payloads; a short
+    same-line argument is left alone. `$(...)` inside double quotes is live code and is
+    followed as such, so masking never swallows a real command -- that nesting is exactly the
+    shape of the false positive, since the prose sat inside a substitution inside quotes.
+    """
+    if '"' not in cmd and "'" not in cmd:
+        return cmd
+    out = list(cmd)
+    i, n = 0, len(cmd)
+    # Frames: ["code"|"dq"|"sq", open_index, segment_start]. The bottom frame is shell code; a quote
+    # pushes a DATA frame, and `$(` inside a data frame pushes CODE back on top. A data frame is
+    # blanked SEGMENT by segment -- the runs between its quotes and any substitution inside it --
+    # so masking `--notes "$(cmd "prose")"` removes the prose without touching the `$(cmd` around it.
+    stack = [["code", 0, None]]
+
+    def blank(a, b):
+        for k in range(a, b):
+            if out[k] != "\n":
+                out[k] = " "
+
+    def close_seg(frame, end):
+        a = frame[2]
+        if a is not None and "\n" in cmd[a:end]:
+            blank(a, end)
+        frame[2] = None
+
+    while i < n:
+        c = cmd[i]
+        top = stack[-1]
+        if top[0] == "sq":
+            if c == "'":
+                close_seg(top, i)
+                stack.pop()
+        elif top[0] == "dq":
+            if c == "\\":
+                i += 2
+                continue
+            if cmd.startswith("$(", i):
+                close_seg(top, i)
+                stack.append(["code", i + 2, None])
+                i += 2
+                continue
+            if c == '"':
+                close_seg(top, i)
+                stack.pop()
+        else:
+            if c == "\\":
+                i += 1
+            elif c == "'":
+                stack.append(["sq", i, i + 1])
+            elif c == '"':
+                stack.append(["dq", i, i + 1])
+            elif c == ")" and len(stack) > 1:
+                stack.pop()
+                if stack[-1][0] in ("dq", "sq"):
+                    stack[-1][2] = i + 1      # data resumes after the substitution
+        i += 1
+    # An UNCLOSED region means a truncated command; treat the remainder as data, the same safe
+    # reading the heredoc pass uses -- better to under-detect in data than to report prose as a
+    # command that ran.
+    for frame in stack:
+        if frame[0] in ("dq", "sq"):
+            close_seg(frame, n)
+    return "".join(out)
+
+
+def _repo_of(cmd):
+    m = _CD_RE.search(cmd)
+    # Trailing shell punctuation is not part of the directory name: `cd ~/ClaudeWorkspace;`
+    # was reported as the repo "ClaudeWorkspace;".
+    return os.path.basename(m.group(1).rstrip("/;&|\"'")) if m else ""
+
+
+def _repo_dir(cmd):
+    """Extract the repo directory from a git command.
+
+    Returns the -C arg if present, else the cd target if the command starts with cd.
+    Returns the canonical path (expanded, resolved).
+    """
+    # First check for git -C <dir>
+    git_c_match = re.search(r'\bgit\s+-C\s+(\S+)', cmd)
+    if git_c_match:
+        return os.path.expanduser(git_c_match.group(1).rstrip("/;&|\"'"))
+    # Otherwise check for cd <dir> at the start of a command
+    cd_match = _CD_RE.search(cmd)
+    if cd_match:
+        return os.path.expanduser(cd_match.group(1).rstrip("/;&|\"'"))
+    return None
+
+
+def _subject_of(cmd):
+    m = _SUBJ_MARK_RE.search(cmd)
+    if m:
+        return m.group(1).strip()
+    m = _MSG_Q_RE.search(cmd)
+    if m:
+        return m.group(2).strip().splitlines()[0]
+    m = _HEREDOC_RE.search(cmd)
+    if m:
+        return m.group(1).strip()
+    return ""
+
+
+def condense(cat, cmd):
+    """The audit-relevant fact, or the raw command when the command IS the fact."""
+    repo = _repo_of(cmd)
+    pre = f"{repo}: " if repo else ""
+    if cat == "git-commit":
+        subj = _subject_of(cmd)
+        return (pre + (subj or "(subject not recoverable from the command line)"))[:MAX_CMD]
+    if cat == "git-push":
+        m = _PUSH_RE.search(cmd)
+        if m:
+            target = " ".join(x for x in (m.group(2), m.group(3)) if x and not x.startswith("-"))
+            forced = "--force" in cmd or "-f " in cmd
+            return f"{pre}push {target or '(default)'}" + ("  ⚠️ FORCED" if forced else "")
+        return (pre + "push")[:MAX_CMD]
+    if cat == "git-tag":
+        m = _TAG_RE.search(cmd)
+        return (pre + "tag " + (m.group(1) if m else "?"))[:MAX_CMD]
+    if cat == "release":
+        m = _REL_RE.search(cmd)
+        return (pre + f"gh release {m.group(1)} {m.group(2) or ''}".strip()) if m else pre + "gh release"
+    # waypoints, automation, plugin, destructive: the command text IS the fact, so it is kept --
+    # but flattened and truncated here, since it was stored whole for the condensers above.
+    #
+    # Truncate from the MATCH, not from the start of the command. These sections are the ones the
+    # audit is supposed to trust, and a shell one-liner routinely carries the operative call at the
+    # end: dogfooding showed `claude plugin update` entries displayed as the `git add && git commit`
+    # that happened to open the same line, and destructive entries showing a `mktemp` instead of the
+    # `rm`. The entry was true and the evidence shown for it was somebody else's.
+    # Locate the match BEFORE flattening. The anchor accepts a newline as a command position, so
+    # flattening first removes the very character that makes a match possible -- which silently
+    # undid the 0.5.3 fix for any command whose operative call began a line rather than following
+    # an `&&`, and sent the display back to the head.
+    raw = cmd.split(SUBJ_MARK)[0]
+    pat = CAT_PATTERNS.get(cat)
+    m = pat.search(raw) if pat else None
+    if m and m.start() > 0:
+        # Step over the operator the anchor matched, so the fragment starts at the command itself.
+        # `split()` already drops leading whitespace, so only the operators need stripping.
+        head = " ".join(raw[m.start():].lstrip("&|;`( \t").split())
+        return "… " + head[:MAX_CMD] + ("…" if len(head) > MAX_CMD else "")
+    one = " ".join(raw.split())
+    return one[:MAX_CMD] + ("…" if len(one) > MAX_CMD else "")
+
+
+def classify(path):
+    low = path
+    for name, globs in SURFACES:
+        for g in globs:
+            if fnmatch.fnmatch(low, g) or fnmatch.fnmatch("/" + low.lstrip("/"), g):
+                return name
+    return "other"
+
+
+# --------------------------------------------------------------------------- redaction
+
+
+def _load_redactor():
+    """Reuse the plugin's own scanner rather than hand-rolling a pattern.
+
+    The digest quotes real commands, and a command can carry a token. An improvised regex here
+    would have none of redact-secret's word-boundary, shape and value filtering, which is exactly
+    the mistake its own documentation warns about. If it cannot be loaded, redaction is reported as
+    UNAVAILABLE rather than silently skipped -- quietly emitting raw text would be the worst of
+    the three outcomes.
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    target = os.path.join(here, "redact-secret.py")
+    if not os.path.exists(target):
+        return None
+    try:
+        spec = importlib.util.spec_from_file_location("_redact_secret", target)
+        if spec is None or spec.loader is None:
+            return None
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+    except Exception:
+        return None
+
+
+_RED = _load_redactor()
+# DEFAULT_PATTERN in redact-secret is the raw BYTES pattern, not a compiled one -- scan_bytes takes
+# a compiled pattern and calls .finditer on it. Compile once here rather than per call; getting
+# this wrong is silent, because the resulting AttributeError is caught by the fail-closed path and
+# every quoted line comes out as "[REDACTION FAILED]" -- safe, but useless, and easy to ship.
+_RED_PATTERN = None
+if _RED is not None:
+    try:
+        _RED_PATTERN = re.compile(_RED.DEFAULT_PATTERN)
+    except Exception:
+        _RED_PATTERN = None
+
+
+def redact(text):
+    """Scrub before anything is printed. Never print-then-scrub: the print is the leak."""
+    if _RED is None or _RED_PATTERN is None or not text:
+        return text
+    try:
+        data = text.encode("utf-8", "replace")
+        # scan_bytes returns (accepted, filtered) where accepted is [(offset, token, kind)].
+        # Only `accepted` is substituted: `filtered` is what its five-layer filter already judged
+        # NOT to be a secret (placeholders, benign values, prose), and redacting those would bury
+        # the real finding in noise -- the exact failure its own docs warn about.
+        accepted, _filtered = _RED.scan_bytes(data, _RED_PATTERN)
+        if not accepted:
+            return text
+        out = bytearray()
+        last = 0
+        for offset, token, _kind in accepted:
+            if offset < last:            # overlapping spans: keep the first, skip the rest
+                continue
+            out += data[last:offset] + b"[REDACTED]"
+            last = offset + len(token)
+        out += data[last:]
+        return out.decode("utf-8", "replace")
+    except Exception as e:
+        # A redactor that errors must NEVER be treated as a redactor that found nothing: that
+        # would turn a bug into a leak. Fail closed, and name the reason so it gets fixed.
+        return f"[REDACTION FAILED ({type(e).__name__}) - value withheld]"
+
+
+def redaction_status():
+    if _RED is None or _RED_PATTERN is None:
+        return "UNAVAILABLE (redact-secret.py not importable/compilable) — quoted text is RAW"
+    return "active (redact-secret.py)"
+
+
+# --------------------------------------------------------------------------- selection
+
+
+def project_slug(path):
+    """Claude Code's own directory naming: the absolute path with separators as dashes."""
+    return path.replace("/", "-")
+
+
+def current_session_transcript():
+    """Return this session's own transcript path, or None.
+
+    Claude Code exports CLAUDE_CODE_SESSION_ID into the Bash tool environment, and the
+    transcript is always <that id>.jsonl somewhere under ~/.claude/projects. That is an
+    IDENTITY, so it beats both heuristics this script used to rely on:
+
+      * the project dir was derived from os.getcwd(), but a transcript lives under the
+        directory the session was LAUNCHED in, and cwd drifts during a session;
+      * candidates were then ordered by file MTIME, so a ten-second nested `claude -p`
+        probe outranked a thousand-record real session.
+
+    Measured 2026-09-20: those two together made `--last 1` scan an unrelated 42-record
+    child transcript and report "changed no tracked file" for a session that had just cut
+    three releases. A wrong-subject clean bill is worse than no check, so prefer identity
+    and keep the heuristic only as a fallback.
+    """
+    sid = os.environ.get("CLAUDE_CODE_SESSION_ID", "").strip()
+    if not sid:
+        return None
+    for root in glob.glob(os.path.join(PROJECTS_DIR, "*")):
+        cand = os.path.join(root, f"{sid}.jsonl")
+        if os.path.isfile(cand):
+            return cand
+    return None
+
+
+def find_transcripts(args):
+    if args.file:
+        return [os.path.abspath(f) for f in args.file]
+    # With no explicit target, audit THIS session rather than guessing from cwd+mtime.
+    # Any of --session/--project/--all-projects/--since means the user named a target, and
+    # --last N>1 asks for a range, so self-identification would be wrong in all of those.
+    if (not args.session and not args.project and not args.all_projects
+            and not args.since and not args.exclude and args.last == 1):
+        own = current_session_transcript()
+        if own:
+            return [own]
+    roots = []
+    if args.all_projects:
+        roots = sorted(glob.glob(os.path.join(PROJECTS_DIR, "*")))
+    elif args.project:
+        cand = os.path.join(PROJECTS_DIR, args.project)
+        roots = [cand] if os.path.isdir(cand) else sorted(
+            glob.glob(os.path.join(PROJECTS_DIR, f"*{args.project}*")))
+    else:
+        roots = [os.path.join(PROJECTS_DIR, project_slug(os.getcwd()))]
+    files = []
+    for r in roots:
+        files.extend(glob.glob(os.path.join(r, "*.jsonl")))
+    if args.session:
+        files = [f for f in files
+                 if os.path.basename(f).startswith(args.session)
+                 or args.session in os.path.basename(f)]
+    if args.exclude:
+        files = [f for f in files
+                 if not any(os.path.basename(f).startswith(x) for x in args.exclude)]
+    by_mtime = sorted(files, key=os.path.getmtime, reverse=True)
+    files = sorted(files, key=_recency, reverse=True)
+    _warn_if_mtime_misleads(by_mtime, files)
+    if args.since:
+        files = [f for f in files if _mtime_date(f) >= args.since]
+    if args.last and not args.session and not args.file:
+        files = files[:args.last]
+    return files
+
+
+def _last_content_ts(f, tail_bytes=65536):
+    """Epoch seconds of the newest record timestamp inside a transcript, or None.
+
+    Only the tail is read, so ranking a hundred transcripts stays cheap. mtime is NOT a
+    stand-in: a resumed or rewritten transcript gets a fresh mtime with old content."""
+    import datetime
+    try:
+        with open(f, "rb") as fh:
+            fh.seek(0, os.SEEK_END)
+            fh.seek(max(0, fh.tell() - tail_bytes))
+            tail = fh.read().decode("utf-8", errors="replace")
+    except OSError:
+        return None
+    best = None
+    for line in tail.splitlines():
+        try:
+            ts = json.loads(line).get("timestamp")
+            when = datetime.datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp()
+        except (ValueError, AttributeError, TypeError):
+            continue  # a cut first line, a non-object record, or no/odd timestamp
+        best = when if best is None else max(best, when)
+    return best
+
+
+def _recency(f):
+    """Sort key: content timestamp when the transcript has one, else its mtime."""
+    ts = _last_content_ts(f)
+    return ts if ts is not None else os.path.getmtime(f)
+
+
+def _warn_if_mtime_misleads(by_mtime, by_content):
+    """The heuristic fallback is only trustworthy while both orderings agree on the winner.
+    When they do not, say so where the reader will see it instead of silently picking one."""
+    if by_mtime and by_content and by_mtime[0] != by_content[0]:
+        print(f"audit-scan: WARNING newest by MTIME is {os.path.basename(by_mtime[0])[:8]} but "
+              f"newest by transcript CONTENT is {os.path.basename(by_content[0])[:8]} -- "
+              f"selecting by content. Confirm this is the session you mean, or pass an "
+              f"explicit path / --session.", file=sys.stderr)
+
+
+def _mtime_date(f):
+    import datetime
+    return datetime.datetime.fromtimestamp(os.path.getmtime(f)).date().isoformat()
+
+
+# --------------------------------------------------------------------------- the scan
+
+
+# 0063: "tracked on waypoints" / "recorded as a 🧭 waypoint" / "noted on the waypoint". A tracking
+# VERB is required in front, so ordinary uses of the word ("three waypoints before the summit")
+# never fire.
+_WP_CLAIM = re.compile(
+    r"\b(?:tracked|recorded|logged|filed|captured|noted|left|parked|added|queued)\b"
+    r"[^.\n]{0,30}?\b(?:on|in|as|to)\s+(?:a\s+|the\s+)?(?:🧭\s*)?waypoints?\b", re.I)
+# A closing quote ("…/waypoints.py" add) and global flags (waypoints.py --json add) may sit between
+# the name and the subcommand; both still mutate the store.
+_WP_MUTATE = re.compile(
+    r"\bwaypoints(?:\.py)?[\"']?(?:\s+--?[\w-]+(?:=\S+)?)*\s+(?:add|edit|triage|done|reopen)\b", re.I)
+# A negation inside the matched span ("tracked in Jira, not on waypoints") inverts the claim.
+_WP_NEG = re.compile(r"\b(?:not|never|no longer|isn't|wasn't|aren't)\b|n't\b", re.I)
+
+class Scan:
+    def __init__(self, path):
+        self.path = path
+        self.bytes = os.path.getsize(path)
+        self.lines = 0
+        self.bad_lines = 0        # did not parse as JSON at all
+        self.odd_records = 0      # parsed, but not a usable object
+        self.session_ids = set()
+        self.cwds = collections.Counter()
+        self.cur_cwd = None                      # cwd of the record currently being fed
+        self.branches = collections.Counter()
+        self.versions = set()
+        self.first_ts = None
+        self.last_ts = None
+        self.turns = collections.Counter()
+        self.files = collections.Counter()       # abs path -> version count
+        # Repos touched via cd or git -C in the transcript
+        self.repos = set()
+        # Paths that only a SHELL command names as a write target. Lower confidence than
+        # self.files by construction — see _SHELL_WRITE_RES. Kept separate so the two are
+        # never conflated in the report.
+        self.shell_writes = collections.Counter()   # abs path -> times named
+        self.heredoc_writes = collections.Counter() # abs path -> times written from a heredoc body
+        self.saw_shell_write_cmd = False            # did any write-shaped shell command appear?
+        self.shell_removes = collections.Counter()  # abs path -> times named as a removal target
+        self.saw_shell_remove_cmd = False           # did any removal-shaped shell command appear?
+        self.tools = collections.Counter()
+        self.cmds = collections.defaultdict(list)   # category -> [command]
+        self.readonly_git = 0
+        self.readonly_automation = 0
+        self.tasks = {}
+        self.prompts = []
+        self.api_errors = []
+        self.denials = collections.Counter()
+        self.stop_reasons = collections.Counter()
+        self.subagents = 0
+        self.plugins = set()
+        self.skills = set()
+        # 0063: assistant prose claiming a follow-up is "tracked on waypoints". Checked at report
+        # time against the waypoints commands actually run, so an unbacked claim is named in GAPS.
+        self.waypoint_claims = []
+
+    # -- per-record handling, ordered by how often each type appears so the common case is cheap
+    def feed(self, d):
+        t = d.get("type")
+        self.turns[t] += 1
+
+        ts = d.get("timestamp")
+        if ts:
+            if self.first_ts is None or ts < self.first_ts:
+                self.first_ts = ts
+            if self.last_ts is None or ts > self.last_ts:
+                self.last_ts = ts
+        for key in ("sessionId", "session_id"):
+            if d.get(key):
+                self.session_ids.add(d[key])
+        if d.get("cwd"):
+            self.cwds[d["cwd"]] += 1
+            # The cwd IN EFFECT for the records that follow. A session that moves between repos
+            # has several, and resolving a relative path against the most COMMON one invents a
+            # path that never existed: dogfooding this scanner reported
+            # cost-tracker/scripts/audit-scan.py, a file in neither repo, because the dominant
+            # cwd was the other project. A wrong path is worse than no path — it sends the reader
+            # to audit a file that does not exist.
+            self.cur_cwd = d["cwd"]
+        if d.get("gitBranch"):
+            self.branches[d["gitBranch"]] += 1
+        if d.get("version"):
+            self.versions.add(d["version"])
+        if d.get("isSidechain"):
+            self.subagents += 1
+        if d.get("attributionPlugin"):
+            self.plugins.add(str(d["attributionPlugin"]))
+        if d.get("attributionSkill"):
+            self.skills.add(str(d["attributionSkill"]))
+        if d.get("toolDenialKind"):
+            self.denials[str(d["toolDenialKind"])] += 1
+        if d.get("isApiErrorMessage") or d.get("apiErrorStatus"):
+            self.api_errors.append(str(d.get("apiErrorStatus") or "error"))
+
+        if t == "file-history-delta":
+            # The cheap authoritative answer. `realParentDir` + `trackingPath` reconstruct the
+            # absolute path; the version count tells you edited-once from edited-repeatedly.
+            b = d.get("backup") or {}
+            tp = d.get("trackingPath") or ""
+            if not tp:
+                return
+            # `realParentDir` is already the file's PARENT directory, while `trackingPath` is
+            # relative to the session cwd. Joining the two doubles the middle of the path
+            # (".../memory/.claude/projects/.../memory/MEMORY.md"), which then fails to match the
+            # same file seen via a tool call -- so every file was double-counted AND reported as
+            # having no change record. Take the parent from the backup and only the basename from
+            # the tracking path.
+            parent = b.get("realParentDir")
+            if parent:
+                self.files[canon(os.path.join(parent, os.path.basename(tp)))] += 1
+            elif self.cwds:
+                self.files[canon(os.path.join(self.cwds.most_common(1)[0][0], tp))] += 1
+            else:
+                self.files[canon(tp)] += 1
+            return
+
+        if t == "assistant":
+            msg = d.get("message") or {}
+            if msg.get("stop_reason"):
+                self.stop_reasons[msg["stop_reason"]] += 1
+            for blk in msg.get("content") or []:
+                if isinstance(blk, dict) and blk.get("type") == "tool_use":
+                    self._tool(blk)
+                elif isinstance(blk, dict) and blk.get("type") == "text":
+                    for m in _WP_CLAIM.finditer(str(blk.get("text") or "")):
+                        if not _WP_NEG.search(m.group(0)):
+                            self.waypoint_claims.append(m.group(0))
+                            break
+            return
+
+        if t == "last-prompt" and d.get("lastPrompt"):
+            p = d["lastPrompt"]
+            if isinstance(p, str) and p.strip():
+                self.prompts.append(p.strip())
+
+    def _tool(self, blk):
+        name = blk.get("name") or "?"
+        self.tools[name] += 1
+        inp = blk.get("input") or {}
+        if not isinstance(inp, dict):
+            return
+
+        # WRITING tools are a CROSS-CHECK on file-history, not the primary source: a file written
+        # by a Bash heredoc has no delta record, and a delta with no tool call means an external
+        # change. Disagreement between the two is itself worth reporting. Read is excluded --
+        # it also carries file_path, and listing what was merely READ under a heading about
+        # changes is a false positive in the one section the audit acts on.
+        if name in ("Write", "Edit", "MultiEdit", "NotebookEdit"):
+            for key in ("file_path", "notebook_path"):
+                if inp.get(key):
+                    self.files.setdefault(canon(inp[key]), 0)
+
+        if name == "Bash":
+            self._bash(str(inp.get("command") or ""))
+        elif name in ("TaskCreate", "TaskUpdate"):
+            tid = str(inp.get("task_id") or inp.get("id") or f"t{len(self.tasks)}")
+            rec = self.tasks.setdefault(tid, {"desc": "", "state": ""})
+            if inp.get("description") or inp.get("prompt"):
+                rec["desc"] = str(inp.get("description") or inp.get("prompt"))[:120]
+            if inp.get("state") or inp.get("status"):
+                rec["state"] = str(inp.get("state") or inp.get("status"))
+
+    def _bash(self, cmd):
+        if not cmd:
+            return
+        probe = shell_only(cmd)
+        # Track repos touched via git commands (cd <dir> && git ... or git -C <dir> ...)
+        # Do this BEFORE the read-only check so even read-only git commands count as touching the repo
+        if re.search(r'\bgit\b', cmd):
+            repo_dir = _repo_dir(cmd)
+            if repo_dir:
+                self.repos.add(canon(repo_dir))
+        # Mine writes/removes BEFORE the read-only classification: a compound like
+        # `git status --porcelain && echo x > ~/.claude/waypoints.json` matches GIT_READONLY
+        # on its git segment, and the early return used to swallow write/remove mining —
+        # the durable write was reported as "changed nothing" while the absence message
+        # asserted a false "no write or remove command ran either" (desktop-migration
+        # fleet probe 2026-11-13). Commands whose mining produced a durable finding are
+        # not counted as read-only git either: "changed nothing" would be false for them.
+        n_before = len(self.shell_writes) + len(self.shell_removes) + len(self.heredoc_writes)
+        self._mine_shell_writes(probe, cmd)
+        self._mine_shell_removes(probe, cmd)
+        self._mine_heredoc_writes(cmd)
+        produced = (len(self.shell_writes) + len(self.shell_removes)
+                    + len(self.heredoc_writes)) > n_before
+        if GIT_READONLY.search(probe) and not produced and not any(
+                p.search(probe) for k, p in CMD_PATTERNS if k.startswith("git-")):
+            self.readonly_git += 1
+            return
+        subj = _subject_of(cmd)
+        subj_tail = SUBJ_MARK + " ".join(subj.split())[:200] if subj else ""
+        if AUTOMATION_READONLY.search(probe):
+            self.readonly_automation += 1
+        for cat, pat in CMD_PATTERNS:
+            m = pat.search(probe)
+            if m:
+                # Stored as SHELL CODE plus the subject, generously capped: condense() needs the
+                # line structure, and the display truncation happens at report time instead.
+                #
+                # The retained head must be guaranteed to CONTAIN this category's match. A long
+                # one-liner can push the matching call past the cap, and then the display falls back
+                # to the head -- which is how a `claude plugin update` entry ended up showing the
+                # `python3 - <<PY` that opened the same line. The head is kept for the leading `cd`
+                # (that is where the repo name comes from), and the match window is appended.
+                code = probe[:RAW_CMD_KEEP]
+                if m.end() > RAW_CMD_KEEP:
+                    code += "\n" + probe[m.start():m.start() + MAX_CMD + 40]
+                # The subject tail goes LAST: condense() cuts the value at the marker, so anything
+                # appended after it is invisible -- which is where the match window was going.
+                self.cmds[cat].append(code + subj_tail)
+
+    def _mine_shell_writes(self, probe, raw):
+        """Pull write TARGETS out of a shell command and keep the ones on a durable surface.
+
+        Runs on the prose-masked `probe`, not the raw command, so a path quoted inside a commit
+        message or a heredoc BODY is not mistaken for a write target — that is the same masking the
+        category patterns rely on, and without it a commit message naming a memory file would
+        register as an edit to it.
+
+        Filtered to durable surfaces on purpose: `> /tmp/x` and `> /dev/null` are the overwhelming
+        majority of redirects in any session and none of them are records worth auditing."""
+        for rx in _SHELL_WRITE_RES:
+            for m in rx.finditer(probe):
+                tgt = m.group(1)
+                if not tgt or tgt.startswith("$") or tgt in ("/dev/null", "/dev/stderr"):
+                    continue
+                self.saw_shell_write_cmd = True
+                # Resolve relative paths against the cwd IN EFFECT at the position of the match.
+                # This handles chained `cd` commands: `cd a && cd b && cat > file` resolves `file`
+                # against the cwd after both cds, not the session's dominant cwd.
+                if not os.path.isabs(tgt) and not tgt.startswith("~"):
+                    base = self._cwd_at_position(probe, m.start())
+                    if not base:
+                        continue
+                    tgt = os.path.join(base, tgt)
+                tgt = self._durable_target(tgt)
+                if tgt:
+                    self.shell_writes[tgt] += 1
+
+    def _durable_target(self, tgt):
+        """Canonicalize a shell path argument, or return None if it is not worth auditing.
+
+        Shared by the write and removal miners so the two apply exactly the same surface filter —
+        a divergence here would make one of them report scratch files while the other stayed quiet.
+        The `docs` surface is `*.md`/`*.txt`/`*.rst`, which a scratch file in /tmp satisfies, and
+        `> /tmp/x.txt` is one of the commonest lines in any session. A delta record for such a file
+        is still worth reporting (something really changed), but a merely-NAMED temp path is noise,
+        and noise here trades the false negative this exists for against a false positive."""
+        tgt = canon(os.path.expanduser(tgt))
+        if classify(tgt) == "other":
+            return None
+        if tgt.startswith(("/private/tmp/", "/private/var/", "/tmp/", "/var/")):
+            return None
+        return tgt
+
+    def _cwd_at_position(self, probe, pos):
+        """Compute the effective cwd at a given character position in the command.
+
+        Parses the command up to `pos`, applying each `cd` in order. Absolute `cd` resets
+        the base; relative `cd` joins it. Returns the session's dominant cwd if no cd
+        is found before the position.
+        """
+        # Start with the session's dominant cwd
+        base = self.cur_cwd or (self.cwds.most_common(1)[0][0] if self.cwds else None)
+        if not base:
+            return None
+
+        # Look at the portion of the command up to the match position
+        prefix = probe[:pos]
+
+        # Find all cd commands in the prefix
+        for m in _CD_RE.finditer(prefix):
+            cd_target = m.group(1).rstrip("/;&|\"'")
+            if os.path.isabs(cd_target) or cd_target.startswith("~"):
+                base = os.path.expanduser(cd_target)
+            else:
+                base = os.path.join(base, cd_target)
+            base = os.path.normpath(base)
+
+        return base
+
+    def _mine_heredoc_writes(self, raw):
+        """Write targets named only inside an INTERPRETER heredoc body. See _INTERP_HEREDOC_RE.
+
+        Reads the RAW command (the probe has the bodies stripped, which is the point of it). The
+        cwd for a relative literal is the one in effect at the heredoc's opener, computed on the
+        shell code before it — earlier bodies are stripped first, so a `cd` quoted in one cannot
+        move the base for the next."""
+        if "<<" not in raw:
+            return
+        for hm in _INTERP_HEREDOC_RE.finditer(raw):
+            tag = hm.group(2)
+            start = hm.end()
+            end = re.search(r"(?m)^\s*" + re.escape(tag) + r"\s*$", raw[start:])
+            body = raw[start:start + end.start()] if end else raw[start:]
+            targets = _heredoc_write_targets(body)
+            if not targets:
+                continue
+            self.saw_shell_write_cmd = True
+            prefix = shell_only(raw[:hm.start() + 1])
+            for tgt in targets:
+                if not os.path.isabs(tgt) and not tgt.startswith("~"):
+                    base = self._cwd_at_position(prefix, len(prefix))
+                    if not base:
+                        continue
+                    tgt = os.path.join(base, tgt)
+                tgt = self._durable_target(tgt)
+                if tgt:
+                    self.heredoc_writes[tgt] += 1
+
+    def _mine_shell_removes(self, probe, raw):
+        """Pull REMOVAL targets out of a shell command. See _SHELL_REMOVE_RES for why separate."""
+        for rx in _SHELL_REMOVE_RES:
+            for m in rx.finditer(probe):
+                for tgt in m.group(1).split():
+                    if not tgt or tgt.startswith(("$", "-")) or tgt in ("/dev/null",):
+                        continue
+                    self.saw_shell_remove_cmd = True
+                    if not os.path.isabs(tgt) and not tgt.startswith("~"):
+                        base = self._cwd_at_position(probe, m.start())
+                        if not base:
+                            continue
+                        tgt = os.path.join(base, tgt)
+                    tgt = self._durable_target(tgt)
+                    if tgt:
+                        self.shell_removes[tgt] += 1
+
+    def run(self):
+        with open(self.path, "r", encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                self.lines += 1
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    d = json.loads(line)
+                except json.JSONDecodeError:
+                    self.bad_lines += 1
+                    continue
+                if not isinstance(d, dict):
+                    # Valid JSON that is not a record (a bare list or scalar). Counted separately
+                    # from a decode failure because the two mean different things about the file,
+                    # and a single "malformed" tally would hide which one you are looking at.
+                    self.odd_records += 1
+                    continue
+                try:
+                    self.feed(d)
+                except Exception:
+                    # One malformed record must never abort a scan whose whole value is that it
+                    # is cheaper than the alternative. Count it and keep going.
+                    self.odd_records += 1
+        return self
+
+
+# --------------------------------------------------------------------------- reporting
+
+
+def _uniq(seq):
+    seen, out = set(), []
+    for x in seq:
+        if x not in seen:
+            seen.add(x)
+            out.append(x)
+    return out
+
+
+def _section(out, title, rows, empty=None):
+    if not rows:
+        if empty:
+            out.append(f"\n{title}\n  {empty}")
+        return
+    out.append(f"\n{title}")
+    for r in rows[:MAX_PER_SECTION]:
+        out.append(f"  {r}")
+    if len(rows) > MAX_PER_SECTION:
+        out.append(f"  … {len(rows) - MAX_PER_SECTION} more (--json for all)")
+
+
+def report(scans, args):
+    out = []
+    total_raw = sum(s.bytes for s in scans)
+
+    for s in scans:
+        sid = ", ".join(sorted(s.session_ids)) or os.path.basename(s.path)[:8]
+        out.append("=" * 72)
+        out.append(f"✍️ audit-scan: SESSION {sid}")
+        out.append(f"  transcript  {s.path}")
+        out.append(f"  span        {s.first_ts or '?'} → {s.last_ts or '?'}")
+        out.append(f"  size        {s.bytes/1024:.0f} KB, {s.lines} records"
+                   + (f", {s.bad_lines} unparseable" if s.bad_lines else "")
+                   + (f", {s.odd_records} unusable shape" if s.odd_records else ""))
+        if s.cwds:
+            out.append(f"  cwd         {'; '.join(p for p, _n in s.cwds.most_common(3))}")
+        if s.branches:
+            out.append(f"  branch      {'; '.join(b for b, _n in s.branches.most_common(3))}")
+        if s.versions:
+            out.append(f"  cc version  {', '.join(sorted(s.versions))}")
+        if s.repos:
+            out.append(f"  repos       {'; '.join(sorted(s.repos))}")
+        if s.subagents:
+            out.append(f"  subagents   {s.subagents} sidechain record(s)")
+
+        # WRONG-SUBJECT GUARD. Selection can still be a heuristic (no CLAUDE_CODE_SESSION_ID,
+        # or the user named a --project/--last range), and the failure mode that matters is
+        # SILENT: a scan of someone else's transcript reports "changed no tracked file" and
+        # reads as a clean wrap. If we know our own id and it is absent from this transcript,
+        # say so where the verdict is read rather than leaving it to be inferred from the span.
+        own_sid = os.environ.get("CLAUDE_CODE_SESSION_ID", "").strip()
+        if own_sid and s.session_ids and own_sid not in s.session_ids:
+            out.append(f"  ⚠️  NOT THIS SESSION — current is {own_sid[:8]}; findings below "
+                       f"describe a DIFFERENT session. Pass an explicit path, or drop "
+                       f"--project/--last, to audit your own.")
+
+        # --- durable records, grouped by surface: this is the section the audit acts on ---
+        touched = {p: n for p, n in s.files.items() if n > 0}
+        by_surface = collections.defaultdict(list)
+        for p, n in sorted(touched.items()):
+            by_surface[classify(p)].append(f"{p}" + (f"  (v{n})" if n > 1 else ""))
+        rows = []
+        for surf, _globs in SURFACES + [("other", [])]:
+            group = by_surface.get(surf)
+            if not group:
+                continue
+            rows.append(f"[{surf}]")
+            if surf == "other" and len(group) > 8:
+                # Collapse to per-directory counts. A durable record is worth naming individually;
+                # thirty source files in one repo are one fact ("that repo was worked on"), and
+                # spelling them out is how a digest quietly becomes the transcript again.
+                per_dir = collections.Counter(os.path.dirname(x.split("  (v")[0])
+                                             for x in group)
+                for dirname, n in per_dir.most_common():
+                    rows.append(f"  {dirname}/  — {n} file(s)")
+                rows.append(f"  (--json lists all {len(group)} individually)")
+            else:
+                rows.extend("  " + x for x in group)
+        # ★ "nothing found" and "nothing I could RECOGNISE" are different facts and must not
+        # render identically. The old unconditional wording claimed the first while often meaning
+        # the second, so a blind scan read as a clean bill of health — and the calmer the output
+        # looked, the worse the coverage was. Measured on a session that DELETED an always-loaded
+        # instruction file. The tool already knew which case it was in (saw_shell_write_cmd), it
+        # just did not say so here, where the reader actually looks.
+        if touched:
+            empty_msg = None
+        elif s.shell_removes:
+            # Found during the pre-merge dogfood: claiming "no path RECOGNISED" while the REMOVED
+            # section below names one is self-contradictory, and the contradiction points the reader
+            # at the wrong worry. Nothing was MODIFIED, but something was found — say which.
+            empty_msg = ("nothing MODIFIED — but see REMOVED below: this session's durable change "
+                         "was a deletion,\n  not an edit.")
+        elif s.saw_shell_write_cmd or s.saw_shell_remove_cmd:
+            empty_msg = ("no path RECOGNISED — write/remove commands DID run, but none named a "
+                         "path on a durable surface.\n  This is a gap in THIS scan, not evidence "
+                         "that nothing changed: a script written to a file and run\n  later is "
+                         "invisible here. Cross-check with `ls -lt`/`find -newermt` over the "
+                         "span.")
+        else:
+            empty_msg = "none recorded, and no write or remove command ran either"
+        _section(out, f"DURABLE RECORDS MODIFIED ({len(touched)} file(s))", rows,
+                 empty=empty_msg)
+
+        mentioned_only = sorted(p for p, n in s.files.items() if n == 0 and p not in touched)
+        if mentioned_only:
+            _section(out, "FILES NAMED BY A TOOL BUT WITH NO CHANGE RECORD "
+                          "(read, or written via a shell redirect)",
+                     mentioned_only)
+
+        # Durable records the SHELL wrote. Anything already carrying a delta or a writing-tool
+        # record is dropped: it is confirmed by stronger evidence and repeating it here would
+        # imply the weaker finding is a separate change.
+        # Heredoc-body writes join the same lower-confidence list, tagged so the reader knows the
+        # evidence is a write CALL inside interpreter code rather than a shell redirect.
+        shell_only_writes = sorted(sp for sp in set(s.shell_writes) | set(s.heredoc_writes)
+                                   if sp not in touched and sp not in s.files)
+        if shell_only_writes:
+            _section(out, "DURABLE RECORDS WRITTEN BY A SHELL COMMAND "
+                          "(lower confidence — a named path is weaker evidence than a delta)",
+                     [f"{sp}   [{classify(sp)}]"
+                      + ("  (inside a heredoc body)" if sp in s.heredoc_writes
+                         and sp not in s.shell_writes else "")
+                      for sp in shell_only_writes])
+
+        # Removals get their own section rather than joining the writes: "this file was deleted"
+        # and "this file was edited" call for completely different follow-up, and a deletion of a
+        # durable record is the higher-severity finding of the two.
+        shell_removes = sorted(s.shell_removes)
+        if shell_removes:
+            _section(out, "DURABLE RECORDS REMOVED OR MOVED AWAY BY A SHELL COMMAND "
+                          "(⚠️  verify — a deleted record cannot be audited later)",
+                     [f"{sp}   [{classify(sp)}]" for sp in shell_removes])
+
+        for cat in ("waypoints", "git-commit", "git-push", "git-tag", "release",
+                    "plugin", "automation", "destructive"):
+            if s.cmds.get(cat):
+                label = {"waypoints": "WAYPOINTS COMMANDS RUN",
+                         "git-commit": "COMMITS", "git-push": "PUSHES", "git-tag": "TAGS",
+                         "release": "RELEASES", "plugin": "PLUGIN INSTALLS/UPDATES",
+                         "automation": "AUTOMATION (launchctl / crontab)",
+                         "destructive": "⚠️  DESTRUCTIVE COMMANDS"}[cat]
+                _section(out, label, _uniq(redact(condense(cat, c)) for c in s.cmds[cat]))
+
+        if s.tasks:
+            _section(out, "TASK LIST AT END",
+                     [f"{v.get('state') or '?':<12} {v.get('desc') or k}"
+                      for k, v in s.tasks.items()])
+
+        if s.prompts:
+            _section(out, "USER PROMPTS (first and last, truncated)", [
+                redact(p[:MAX_PROMPT].replace("\n", " ⏎ ")) for p in
+                _uniq([s.prompts[0], s.prompts[-1]] if len(s.prompts) > 1 else s.prompts[:1])
+            ])
+
+        # --- ending state: the audit needs to know whether the session finished ---
+        ending = []
+        if s.stop_reasons:
+            ending.append("stop reasons: " + ", ".join(f"{k}×{v}" for k, v in
+                                                       s.stop_reasons.most_common()))
+        if s.api_errors:
+            ending.append(f"⚠️  {len(s.api_errors)} API error record(s): "
+                          + ", ".join(_uniq(s.api_errors)[:5]))
+        if s.denials:
+            ending.append("tool denials: " + ", ".join(f"{k}×{v}"
+                                                       for k, v in s.denials.most_common()))
+        _section(out, "ENDING", ending, empty="no error or denial records")
+
+        if s.tools:
+            out.append("\nTOOL USE  " + ", ".join(f"{k}×{v}" for k, v in s.tools.most_common(12)))
+            extra = []
+            if s.readonly_git:
+                extra.append(f"{s.readonly_git} read-only git")
+            if s.readonly_automation:
+                extra.append(f"{s.readonly_automation} read-only launchctl/crontab")
+            if extra:
+                # Reported rather than silent: "no automation section" and "automation was only
+                # ever INSPECTED" are different findings, and a bare absence cannot tell them apart.
+                out.append(f"  ({', '.join(extra)} command(s) not listed above — they changed "
+                           f"nothing)")
+
+        # --- what this scan CANNOT tell you. Stated, not implied. ---
+        out.append("\nGAPS — this scan cannot determine:")
+        out.append("  · whether a repo is currently clean (run `git status` yourself; a commit")
+        out.append("    here is not evidence of a clean tree afterwards)")
+        out.append("  · whether a memory/plan edit is CORRECT, only that it happened")
+        # This line used to fire unconditionally and say only that shell-written files are
+        # invisible. It was printed on the very session that HAD three shell-written memory
+        # files, so the reader learned nothing about their own scan. GAPS is the mechanism that
+        # names what the tool cannot know, so it must report the SPECIFIC uncertainty it saw.
+        if shell_only_writes:
+            out.append(f"  · whether the {len(shell_only_writes)} shell-written path(s) above were "
+                       "really MODIFIED — the")
+            out.append("    command names them, but no delta record confirms the write landed")
+        elif s.saw_shell_write_cmd or s.saw_shell_remove_cmd:
+            out.append("  · write/remove-shaped shell commands ran, but named no path on a "
+                       "durable surface")
+        else:
+            out.append("  · anything from a file written by a shell redirect with no tool record")
+        if shell_removes:
+            out.append(f"  · whether the {len(shell_removes)} removed path(s) above are gone NOW "
+                       "— a later step may have restored them")
+        out.append("  · the session's reasoning or intent — use --quote, or cc-transcript, for that")
+        # 0063: a report saying a follow-up is "tracked on waypoints" is only true if the session
+        # ran a MUTATING waypoints command. A read-only list/show backs nothing.
+        if s.waypoint_claims and not any(_WP_MUTATE.search(x) for x in s.cmds.get("waypoints", [])):
+            out.append(f"  · ⚠️  UNBACKED waypoint claim ×{len(s.waypoint_claims)}: the reply says "
+                       f"\"{redact(s.waypoint_claims[0][:60])}\" but no waypoints")
+            out.append("    add/edit/triage ran this session — the follow-up may not exist")
+        if _RED is None:
+            out.append("  · ⚠️  redaction was UNAVAILABLE, so quoted text above is unfiltered")
+
+    body = "\n".join(out)
+    econ = (f"\n{'=' * 72}\n"
+            f"ECONOMY  scanned {total_raw/1024:.0f} KB of transcript → emitted "
+            f"{len(body)/1024:.1f} KB of digest "
+            f"({(len(body)/total_raw*100) if total_raw else 0:.2f}% — roughly "
+            f"{max(1, total_raw//max(len(body), 1))}× smaller)\n"
+            f"REDACTION  {redaction_status()}\n"
+            f"NEXT  --quote '<regex>' to read only the section a finding points at")
+    return body + econ
+
+
+# --------------------------------------------------------------------------- quoting
+
+
+def quote(paths, pattern, budget):
+    """Pull only the records matching a regex, with line addresses and a hard budget.
+
+    This is the half that keeps the whole approach honest. The digest is deliberately too terse to
+    answer follow-ups, so without a targeted way to go deeper the only option would be loading the
+    session — which is the cost this exists to avoid. Line numbers are printed so a genuinely
+    unavoidable deep dive can be aimed at an exact offset.
+    """
+    rx = re.compile(pattern, re.I)
+    spent = 0
+    hits = 0
+    for path in paths:
+        with open(path, "r", encoding="utf-8", errors="replace") as fh:
+            for n, line in enumerate(fh, 1):
+                if not rx.search(line):
+                    continue
+                hits += 1
+                try:
+                    d = json.loads(line)
+                except Exception:
+                    d = {}
+                text = _flatten(d) or line
+                for m in rx.finditer(text):
+                    lo = max(0, m.start() - 120)
+                    hi = min(len(text), m.end() + 200)
+                    snip = " ".join(text[lo:hi].split())
+                    chunk = (f"{os.path.basename(path)}:{n}  [{d.get('type', '?')}] "
+                             f"…{redact(snip)}…")
+                    if spent + len(chunk) > budget:
+                        print(f"\n(budget {budget} chars reached after {hits} matching record(s) "
+                              f"— raise it with --budget, or narrow the pattern)")
+                        return 0
+                    print(chunk)
+                    spent += len(chunk)
+                    break
+    if not hits:
+        print(f"(no record matched /{pattern}/ — the pattern found nothing, which is a RESULT: "
+              f"it is not evidence the scan failed)")
+    else:
+        print(f"\n({hits} matching record(s), {spent} chars emitted)")
+    return 0
+
+
+# --------------------------------------------------------------------------- lesson mining (deterministic, no LLM)
+
+_LESSON_CORRECTION = re.compile(r"\b(?:no,|that'?s\s+wrong|actually,?|instead,?|why\s+did\s+you|I\s+said|don'?t)\b", re.I)
+# 0.12.1 (obs 0038): a self-correction needs BOTH a reversal signal AND an OWNED failure — one
+# token alone fired 13/13 on outcome prose ("the corrected trailer", "it turned out the deploy
+# was live"), while the real corrections hid among them. Bare "CORRECTED" is dropped entirely:
+# it was the single noisiest token and every genuine use also carries an owned failure.
+# 0.13.13 (Task 5, waypoint 0098 leads + obs 0100): widened reversal vocabulary —
+# wrong-target admissions, cause statements, false positive, re-extraction, and the
+# "check that cannot fail" shapes (already true before / could not have failed — the
+# launch-verify lesson of obs 0100). The owned-failure pairing below still applies.
+_LESSON_SELF_CORRECTION = re.compile(r"\b(?:was\s+wrong|turned\s+out|disproved|false\s+negative|false\s+positive|premise\s+had\s+decayed|conflat\w+|fell\s+into)\b"
+                                   r"|\blanded\s+on\s+the\s+wrong\b"
+                                   r"|\bthat'?s\s+(?:a|my)\s+(?:mistake|bug)\b"
+                                   r"|\bthe\s+cause\s+was\b|\broot\s+cause\b"
+                                   r"|\blooks\s+wrong\b|\bre-?extract\w*\b"
+                                   r"|\balready\s+true\s+before\b"
+                                   r"|\bcould(?:n't| not)\s+have\s+failed\b", re.I)
+# 0.13.13 (Task 5): "landed on the wrong X", "that's my bug", "looks wrong" and "false
+# positive" are wrongness admissions in themselves — they satisfy the owned-failure side
+# without a separate my/our token (measured: af94571f line 1054 has neither).
+_LESSON_OWNED_FAILURE = re.compile(r"\b(?:my|our)\b[^.\n]{0,80}?\b(?:wrong|incorrect|mistake|mistaken|inverted|backwards)\b"
+                                   r"|\bI\s+(?:was\s+wrong|conflat\w+|fell\s+into|misread|assumed\s+wrongly)\b"
+                                   r"|\b(?:landed\s+on\s+the\s+wrong|that'?s\s+(?:a|my)\s+(?:mistake|bug)|looks\s+wrong|false\s+(?:negative|positive))\b", re.I)
+# Matched ONLY against the text of an ERRORED tool result (see _errored_tool_results): the bare word
+# "schema" anywhere in a record flagged hook text, prose and edit payloads — 24/24 noise on 2026-09-30.
+_LESSON_SCHEMA_ERROR = re.compile(r"InputValidationError|\bExpected\s+\w+,\s+got\s+\w+|\bvalidation\s+error\b|"
+                                  r"\bis\s+expected\s+as\s+`?\w+`?\s+but\s+provided\b|\bInput\s+shape\b", re.I)
+# 0.13.13 (Task 4): hook/permission denials surfacing in a tool result. Measured wording on
+# real transcripts: "PreToolUse:Bash hook error: 🥾 watch-your-step: ✖ BLOCKED — …"
+# (af94571f line 95) and "permission denied by rule".
+_LESSON_GUARD_BLOCK = re.compile(r"PreToolUse\b|hook error|\bBLOCKED\b|permission denied"
+                                 r"|denied by (?:rule|hook)|watch-your-step:", re.I)
+
+# User prompt patterns that signal a correction/redirect
+_LESSON_USER_REDIRECT = re.compile(r"^(?:no|wait|actually|stop|that'?s\s+not|why\s+did|I\s+said|don'?t)\b", re.I)
+# 0.13.6 (obs 0083): corrections also arrive advice-shaped ("we need to make sure …",
+# "should not …", "neither … should …") or clarity-shaped ("what exactly are we talking about
+# here?") — a normal user turn with no contradiction word in it. Measured on session 717b9289:
+# 4 of its 6 corrections were advice-shaped, one a bare clarity question, and all four sat in
+# queue-operation records (see _record_user_text).
+# 0.13.10 (obs 0084): recall measured on session 4bc80515 — 4 of ~7 queued corrections missed
+# because their shapes were not in the corpus: "can not be ignored", "has to be resolved",
+# "should survive", "you should …", "please re-check …". All apply only to the user-prompt pool.
+_LESSON_ADVICE = re.compile(r"\b(?:should\s+not|should\s+either|should\s+survive|make\s+sure|"
+                            r"we\s+need\s+to|follow\s+up\s+with|does\s+nothing\s+to|you\s+should|"
+                            r"can(?:not|'t)\s+be\s+ignored|(?:must|has)\s+to\s+be|must\s+be)\b"
+                            r"|\bneither\b[^.\n]{0,80}?\b(?:should|must)\b"
+                            r"|\bplease\s+(?:re-?check|double-?check|verify|reconcile)\b"
+                            # 0.13.13 (Task 2, obs 0098 recurrence): "look again, …" is a redirect
+                            # shape that carries no contradiction word — measured on the menu survey.
+                            r"|\blook\s+again\b", re.I)
+_LESSON_CLARITY = re.compile(r"\b(?:i'?m\s+sorry|what\s+exactly|what\s+do\s+you\s+mean|"
+                             r"please\s+(?:inform|explain|clarify|elaborate)|i'?m\s+confused|"
+                             r"not\s+sure\s+what\s+you\s+mean)\b", re.I)
+# 0.13.13 (Task 3, waypoint 0087): partial agreement is a correction shape — "except for …",
+# "agree with everything except …", "I'd (much) rather …".
+_LESSON_PARTIAL = re.compile(r"\bexcept\s+for\b"
+                             r"|\bagree\w*\s+with\s+(?:everything|all)\s+except\b"
+                             r"|\bi'?d\s+(?:much\s+)?rather\b", re.I)
+
+def _is_correction_prompt(text):
+    """Check if a user prompt contains a correction/redirect signal."""
+    text = text.strip()
+    if not text:
+        return False
+    # Check for redirect at the start of the prompt
+    if _LESSON_USER_REDIRECT.search(text):
+        return True
+    # Check for correction keywords anywhere
+    if _LESSON_CORRECTION.search(text):
+        return True
+    # 0.13.6 (obs 0083): advice- and clarity-shaped turns carry the same signal
+    return bool(_LESSON_ADVICE.search(text) or _LESSON_CLARITY.search(text)
+                or _LESSON_PARTIAL.search(text))
+
+def _is_self_correction(text):
+    """Check if assistant text contains a self-correction signal: a reversal AND an owned
+    failure in the same text (0.12.1, obs 0038). An outcome report carries at most one."""
+    return bool(_LESSON_SELF_CORRECTION.search(text) and _LESSON_OWNED_FAILURE.search(text))
+
+def _is_schema_error(text):
+    """Check if text contains a schema validation error signal."""
+    return bool(_LESSON_SCHEMA_ERROR.search(text))
+
+# 0.13.13 (Task 3, waypoint 0098): a skill body injected as a user turn starts with the
+# harness's own header — never a correction, whatever advice words its body contains
+# (measured: af94571f line 511, a whole SKILL.md, fired CORRECTION on 0.13.12).
+_SKILL_INJECTION_PREFIX = "Base directory for this skill:"
+
+def _is_skill_injection(text):
+    return text.lstrip()[:len(_SKILL_INJECTION_PREFIX)] == _SKILL_INJECTION_PREFIX
+
+# 0.13.13 (Task 3, waypoint 0098): a user turn that is mostly pasted assistant/harness output
+# — >=60% of its non-empty lines indented >=2 spaces or carrying spinner/box-drawing
+# characters — is a quotation, not a correction. Measured on af94571f line 25: pasted share
+# 0.94. Conservative by construction: the filter only ever SUPPRESSES the correction class.
+def _is_pasted_output(text):
+    lines = [ln for ln in text.splitlines() if ln.strip()]
+    if not lines:
+        return False
+    pasted = sum(1 for ln in lines
+                 if (len(ln) - len(ln.lstrip())) >= 2 or any(ch in ln for ch in "⏺✻─❯│"))
+    return pasted / len(lines) >= 0.6
+
+def _is_correction_text(text):
+    """The production correction GATE. The structural filters (skill injection, pasted
+    output, harvester self-quotation — waypoint 0070: a record naming re.compile( or a
+    _LESSON_ identifier is the harvester quoting its own source) see the WHOLE text, because
+    a pasted document is pasted even when its first MAX_PROMPT chars look plain; the
+    vocabulary predicate still sees only the first MAX_PROMPT chars, as before."""
+    if _is_skill_injection(text) or _is_pasted_output(text):
+        return False
+    if re.search(r"re\.compile\(|_LESSON_[A-Z_]+", text):
+        return False
+    return _is_correction_prompt(text[:MAX_PROMPT])
+
+# The --self-test corpus (obs 0050): a deterministic scanner's zero is only a finding when
+# the scanner can be shown to fire. The corpus lives in tests/fixtures/ so sweeping this
+# repo does not keep re-auditing the fixtures; its magic first line declares it test data.
+_LESSON_CORPUS_CLASSES = {
+    "correction": _is_correction_text,   # 0.13.13: the corpus tests the GATE, not the raw predicate
+    "self-correction": _is_self_correction,
+    "schema-error": _is_schema_error,
+}
+# Every class --lessons reports (0.13.6). The two structural classes have no single-text
+# predicate, so the self-test fires them through planted record scenarios in
+# tests/fixtures/lessons-scenarios/<class>[--<slug>].jsonl, run through the SAME extractor.
+_LESSON_ALL_CLASSES = ("correction", "retry-after-fail", "decision", "self-correction",
+                       "schema-error", "guard-block")
+
+
+def _fixture_dir():
+    return os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                        "tests", "fixtures")
+
+
+def _self_test_corpus(corpus_path):
+    """Run the planted lessons corpus through the SAME predicates the scanner runs, and each
+    scenario file through the SAME extractor. Returns (fired, misses, fired_classes): a MUST
+    line whose class does not fire, a MUSTNOT line that fires, a scenario whose class does not
+    come out of _extract_lesson_candidates, and malformed lines are all misses."""
+    misses, fired = [], 0
+    fired_classes = set()
+    with open(corpus_path, encoding="utf-8", errors="replace") as fh:
+        lines = fh.read().splitlines()
+    for lineno, raw in enumerate(lines, 1):
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("MUSTNOT ::"):
+            text = line[len("MUSTNOT ::"):].strip()
+            if any(pred(text) for pred in _LESSON_CORPUS_CLASSES.values()):
+                misses.append(f"line {lineno}: MUSTNOT fired: {text[:80]}")
+            continue
+        if line.startswith("MUST "):
+            cls, sep, text = line[len("MUST "):].partition(" :: ")
+            pred = _LESSON_CORPUS_CLASSES.get(cls.strip())
+            if not sep or pred is None:
+                misses.append(f"line {lineno}: malformed/unknown MUST line: {line[:60]}")
+            elif pred(text.strip()):
+                fired += 1
+                fired_classes.add(cls.strip())
+            else:
+                misses.append(f"line {lineno}: MUST {cls.strip()} did not fire: {text.strip()[:80]}")
+            continue
+        misses.append(f"line {lineno}: unrecognized corpus line: {line[:60]}")
+    scen_dir = os.path.join(os.path.dirname(corpus_path), "lessons-scenarios")
+    if os.path.isdir(scen_dir):
+        for fn in sorted(os.listdir(scen_dir)):
+            if not fn.endswith(".jsonl"):
+                continue
+            # 0.13.13 (Task 7): a golden--* scenario is a recall assertion, not a class probe —
+            # synthetic records replaying a real session's lesson shapes (GOLD-L* markers,
+            # expected class per marker) and false-positive shapes (GOLDFP* markers that must
+            # stay silent). >=4/5 lessons must fire with the right class.
+            if fn.startswith("golden--"):
+                scan = Scan(os.path.join(scen_dir, fn)).run()
+                got = _extract_lesson_candidates(scan)
+                by_class = collections.defaultdict(list)
+                for c in got:
+                    by_class[c["type"]].append(c["excerpt"])
+                want = {"GOLD-L1": "retry-after-fail", "GOLD-L2": "retry-after-fail",
+                        "GOLD-L3": "guard-block", "GOLD-L4": "self-correction",
+                        "GOLD-L5": "decision"}
+                fired_n = sum(1 for m, cls in want.items()
+                              if any(m in e for e in by_class.get(cls, [])))
+                fired += 1
+                fired_classes.update(by_class)
+                if fired_n < 4:
+                    misses.append(f"scenario {fn}: golden recall {fired_n}/5 (want >=4/5)")
+                for fp in ("GOLDFP1", "GOLDFP2"):
+                    if any(fp in e for exs in by_class.values() for e in exs):
+                        misses.append(f"scenario {fn}: false positive {fp} fired")
+                continue
+            cls = fn[:-len(".jsonl")].split("--")[0]
+            if cls not in _LESSON_ALL_CLASSES:
+                misses.append(f"scenario {fn}: unknown class {cls!r} (want one of {_LESSON_ALL_CLASSES})")
+                continue
+            scan = Scan(os.path.join(scen_dir, fn)).run()
+            got = {c["type"] for c in _extract_lesson_candidates(scan)}
+            if cls in got:
+                fired += 1
+                fired_classes.add(cls)
+            else:
+                misses.append(f"scenario {fn}: no {cls} candidate came out of the extractor")
+    return fired, misses, fired_classes
+
+
+def _self_test_certified_classes():
+    """The classes the planted corpus can fire RIGHT NOW — the only classes whose zero in
+    --lessons is a real zero; any other zero prints UNKNOWN (obs 0050/0083: a zero from a
+    scanner that cannot fire is a broken instrument, not a finding). A missing corpus or
+    scenarios dir certifies nothing."""
+    corpus = os.path.join(_fixture_dir(), "lessons-corpus.txt")
+    if not os.path.exists(corpus):
+        return set()
+    _, _, fired_classes = _self_test_corpus(corpus)
+    return fired_classes
+
+
+def _errored_tool_results(d):
+    """Texts of the tool results in this record that the harness marked as errors. Two shapes: the
+    real one (a `tool_result` block with is_error inside a `user` record's message.content) and a
+    flat legacy `tool_result` record with isError/error keys."""
+    out = []
+    if d.get("type") in ("tool_result", "tool-result") and (d.get("isError") or d.get("is_error")):
+        out.append(" ".join(str(d.get(k) or "") for k in ("error", "content", "output")))
+    msg = d.get("message") or {}
+    cont = msg.get("content") if isinstance(msg, dict) else None
+    if isinstance(cont, list):
+        for b in cont:
+            if isinstance(b, dict) and b.get("type") == "tool_result" and b.get("is_error"):
+                c = b.get("content")
+                if isinstance(c, list):
+                    c = " ".join(str(x.get("text") or "") for x in c if isinstance(x, dict))
+                out.append(str(c or ""))
+    return out
+
+def _tool_result_texts(d):
+    """(text, is_error) for ALL tool results in this record, both shapes: the real one
+    (tool_result blocks inside a user record's message.content) and the legacy flat
+    top-level tool_result record."""
+    out = []
+    if d.get("type") in ("tool_result", "tool-result"):
+        out.append((" ".join(str(d.get(k) or "") for k in ("error", "content", "output")),
+                    bool(d.get("isError") or d.get("is_error"))))
+    msg = d.get("message") or {}
+    cont = msg.get("content") if isinstance(msg, dict) else None
+    if isinstance(cont, list):
+        for b in cont:
+            if isinstance(b, dict) and b.get("type") == "tool_result":
+                c = b.get("content")
+                if isinstance(c, list):
+                    c = " ".join(str(x.get("text") or "") for x in c if isinstance(x, dict))
+                out.append((str(c or ""), bool(b.get("is_error"))))
+    return out
+
+
+# 0.13.13 (Task 6): durable surfaces whose writes are lesson-shaped — a memory *.md, an
+# observation-log *.md, or a playbook edit touching a Pitfalls section.
+# (the delta shape joins realParentDir + basename(trackingPath), which drops the
+# observation-log level — so the pattern also matches a bare "observation-log/…" trackingPath)
+_LESSON_WRITE_PATH = re.compile(r"(?:^|/)(?:(?:skill-observations/)?observation-log|memory)/[^/]+\.md$")
+
+def _lesson_shaped_write_lines(path):
+    """Line numbers of records that WRITE a lesson-shaped durable surface (tool calls and
+    file-history deltas both count; a Read of the same file does not)."""
+    out = []
+    with open(path, encoding="utf-8", errors="replace") as fh:
+        for n, line in enumerate(fh, 1):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                d = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(d, dict):
+                continue
+            if d.get("type") == "file-history-delta":
+                tp = str(d.get("trackingPath") or "")
+                b = d.get("backup") or {}
+                full = os.path.join(str(b.get("realParentDir") or ""), os.path.basename(tp))
+                if _LESSON_WRITE_PATH.search(full) or _LESSON_WRITE_PATH.search(tp):
+                    out.append(n)
+                continue
+            if d.get("type") == "assistant":
+                for blk in (d.get("message") or {}).get("content") or []:
+                    if not (isinstance(blk, dict) and blk.get("type") == "tool_use"
+                            and blk.get("name") in ("Write", "Edit", "MultiEdit")):
+                        continue
+                    inp = blk.get("input") or {}
+                    if not isinstance(inp, dict):
+                        continue
+                    fp = str(inp.get("file_path") or "")
+                    if _LESSON_WRITE_PATH.search(fp):
+                        out.append(n)
+                    elif (blk.get("name") == "Edit" and fp.endswith(".md")
+                          and "Pitfalls" in str(inp.get("old_string") or "")
+                          + str(inp.get("new_string") or "")):
+                        out.append(n)
+    return out
+
+
+def _record_user_text(d):
+    """The human-typed text a record carries, "" for everything else. Three shapes hold it:
+    a `last-prompt` record's `lastPrompt` (the harness re-records the latest prompt on many
+    later lines), a raw `user` record's TEXT blocks only — its tool_result blocks are the
+    harness talking, not the human — and a mid-turn `queue-operation` ENQUEUE's `content`.
+    0.13.6 (obs 0083): 4 of the 6 corrections in session 717b9289 lived ONLY in queue-operation
+    records, so a pool that reads last-prompt alone never sees them. The queue-operation
+    `remove` twin carries the same content and is not read at all (dedup would catch it, but
+    not reading it is cheaper than deduping it)."""
+    t = d.get("type")
+    if t == "last-prompt":
+        p = d.get("lastPrompt")
+        return p if isinstance(p, str) else ""
+    if t == "queue-operation":
+        if d.get("operation") != "enqueue":
+            return ""
+        c = d.get("content")
+        return c if isinstance(c, str) else ""
+    if t == "user":
+        msg = d.get("message") or {}
+        cont = msg.get("content") if isinstance(msg, dict) else None
+        if isinstance(cont, str):
+            return cont
+        if isinstance(cont, list):
+            return "\n".join(str(b.get("text") or "") for b in cont
+                             if isinstance(b, dict) and b.get("type") == "text")
+    return ""
+
+
+def _tool_target(name, inp):
+    """Stable per-call target for retry pairing: Bash = first word plus, for git, the subcommand
+    (so `git commit` and `git status` are different targets, but `git commit a` and
+    `git commit b` are the same one); Edit/Write-family = the file path."""
+    if not isinstance(inp, dict):
+        return ""
+    if name == "Bash":
+        parts = str(inp.get("command") or "").split()
+        if not parts:
+            return ""
+        if parts[0] == "git" and len(parts) > 1 and not parts[1].startswith("-"):
+            return "git " + parts[1]
+        return parts[0]
+    if name in ("Write", "Edit", "MultiEdit", "NotebookEdit"):
+        return str(inp.get("file_path") or inp.get("notebook_path") or inp.get("path") or "")
+    return ""
+
+
+def _tool_input_key(name, inp):
+    """What makes a later call a DIFFERENT input: the command for Bash, the whole input otherwise."""
+    if not isinstance(inp, dict):
+        return ""
+    if name == "Bash":
+        return str(inp.get("command") or "")
+    return json.dumps(inp, sort_keys=True, default=str)
+
+
+def _answer_texts(d):
+    """Answer + notes text an answered AskUserQuestion carries on its user record's toolUseResult
+    (obs 0098 recurrence 2026-11-08: the session's best correction lived in an answer's `notes`
+    and the scanner never read it). answers: dict question -> answer (or a list); annotations:
+    dict question -> {"notes": …, "preview": …} or a bare string. Only `notes` is read from
+    annotations — `preview` is the option UI the user saw, not their own words."""
+    out = []
+    tr = d.get("toolUseResult")
+    if not isinstance(tr, dict):
+        return out
+    ans = tr.get("answers")
+    if isinstance(ans, dict):
+        out.extend(str(v) for v in ans.values() if isinstance(v, (str, int)))
+    elif isinstance(ans, list):
+        out.extend(str(v) for v in ans if isinstance(v, (str, int)))
+    ann = tr.get("annotations")
+    if isinstance(ann, dict):
+        for v in ann.values():
+            if isinstance(v, str):
+                out.append(v)
+            elif isinstance(v, dict):
+                n = v.get("notes")
+                if isinstance(n, str):
+                    out.append(n)
+    return out
+
+
+def _extract_lesson_candidates(scan):
+    """Extract deterministic lesson candidates from a scan.
+
+    Returns a list of dicts with: type, line, excerpt, category
+    """
+    candidates = []
+
+    # Re-read the transcript to get line numbers and raw content
+    with open(scan.path, "r", encoding="utf-8", errors="replace") as fh:
+        lines = list(fh)
+
+    # Track tool results with errors for retry-after-fail detection
+    error_tool_results = {}  # (tool_name, target) -> line_num
+    last_tool_calls = {}     # tool_name -> (command, line_num)
+    seen_prompts = set()     # the harness re-records the latest prompt on many later lines
+
+    # 0.13.13 (Task 1): the REAL record shape — assistant tool_use blocks paired with the
+    # tool_result blocks (by tool_use_id) inside the user records that follow them. Real
+    # transcripts contain 0 top-level tool_result records (af94571f: 0 top-level vs 171
+    # blocks), so the legacy sections 3–5 below never fire on them; this path does.
+    tool_uses = {}       # tool_use_id -> (name, target, input_key)
+    pending_fails = []   # {"tool","target","input_key","call_no"} — errored results awaiting a retry
+    call_no = 0          # count of tool_use blocks seen so far
+
+    for line_num, line in enumerate(lines, 1):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            d = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(d, dict):
+            continue
+
+        rec_type = d.get("type")
+
+        # 1. User-typed corrections — last-prompt re-records, raw user records, and mid-turn
+        #    queue-operation enqueues all enter ONE pool (0.13.6, obs 0083). Dedupe key is the
+        #    whitespace-collapsed 160-char prefix (the excerpt length): the harness truncates a
+        #    re-recorded lastPrompt to ~200 chars with an ellipsis, so whole-text or
+        #    MAX_PROMPT-prefix keys never match the raw user record and one message counts
+        #    twice. Classification reads MAX_PROMPT chars — pasted documents (a whole SKILL.md
+        #    as a user text block) fire deep past that span, real corrections live within it.
+        prompt = _record_user_text(d)
+        if prompt:
+            key = " ".join(prompt[:160].split())
+            if key not in seen_prompts:
+                seen_prompts.add(key)
+                if _is_correction_text(prompt):
+                    excerpt = prompt[:160].replace("\n", " ⏎ ")
+                    candidates.append({
+                        "type": "correction",
+                        "line": line_num,
+                        "excerpt": excerpt,
+                        "category": "user-redirect"
+                    })
+
+        # 2. Self-corrections in assistant text
+        if rec_type == "assistant":
+            msg = d.get("message") or {}
+            for blk in msg.get("content") or []:
+                if isinstance(blk, dict) and blk.get("type") == "text":
+                    text = blk.get("text", "")
+                    if _is_self_correction(text):
+                        excerpt = text[:160].replace("\n", " ⏎ ")
+                        candidates.append({
+                            "type": "self-correction",
+                            "line": line_num,
+                            "excerpt": excerpt,
+                            "category": "assistant-correction"
+                        })
+
+        # 3. Tool results with errors (for retry-after-fail)
+        if rec_type == "tool_result" or rec_type == "tool-result":
+            is_error = d.get("isError") or d.get("is_error") or False
+            exit_code = d.get("exit_code") or d.get("exitCode")
+            tool_name = d.get("tool") or d.get("name") or ""
+            # Use a simple target heuristic
+            target = ""
+            if tool_name == "Bash":
+                inp = d.get("input") or {}
+                cmd = inp.get("command", "")
+                if cmd:
+                    target = cmd.split()[0] if cmd.split() else ""
+            elif tool_name in ("Write", "Edit", "MultiEdit"):
+                inp = d.get("input") or {}
+                target = inp.get("file_path", "") or inp.get("path", "")
+
+            if is_error or (exit_code and int(exit_code) != 0):
+                error_tool_results[(tool_name, target)] = line_num
+
+            # Track last tool call for retry detection
+            if tool_name:
+                inp = d.get("input") or {}
+                if tool_name == "Bash":
+                    cmd = inp.get("command", "")
+                    if cmd:
+                        last_tool_calls[tool_name] = (cmd, line_num)
+                else:
+                    last_tool_calls[tool_name] = (str(inp), line_num)
+
+        # 4. Tool calls - check for retry after fail (different command toward same target)
+        if rec_type == "assistant":
+            msg = d.get("message") or {}
+            for blk in msg.get("content") or []:
+                if isinstance(blk, dict) and blk.get("type") == "tool_use":
+                    tool_name = blk.get("name") or ""
+                    inp = blk.get("input") or {}
+                    # 0.13.13 block-shape pairing: register this call, then check it against
+                    # pending errored results whose retry window (next 3 tool calls) is open.
+                    call_no += 1
+                    tinp = inp if isinstance(inp, dict) else {}
+                    ttarget = _tool_target(tool_name, tinp)
+                    tkey = _tool_input_key(tool_name, tinp)
+                    if blk.get("id"):
+                        tool_uses[blk["id"]] = (tool_name, ttarget, tkey)
+                    still_pending = []
+                    for f in pending_fails:
+                        if call_no - f["call_no"] > 3:
+                            continue  # retry window expired — drop the failure
+                        if (f["target"] and f["tool"] == tool_name and f["target"] == ttarget
+                                and f["input_key"] != tkey):
+                            src = tinp.get("command") if tool_name == "Bash" else json.dumps(tinp, default=str)
+                            candidates.append({
+                                "type": "retry-after-fail",
+                                "line": line_num,
+                                "excerpt": str(src)[:160].replace("\n", " ⏎ "),
+                                "category": f"retry:{tool_name}",
+                            })
+                            continue  # consumed — one retry candidate per failure
+                        still_pending.append(f)
+                    pending_fails = still_pending
+                    if tool_name == "Bash":
+                        cmd = inp.get("command", "")
+                        target = cmd.split()[0] if cmd.split() else ""
+                        if (tool_name, target) in error_tool_results:
+                            # Check if this is a DIFFERENT command toward the same target
+                            prev_cmd, prev_line = last_tool_calls.get(tool_name, ("", 0))
+                            if cmd and cmd != prev_cmd:
+                                excerpt = cmd[:160].replace("\n", " ⏎ ")
+                                candidates.append({
+                                    "type": "retry-after-fail",
+                                    "line": line_num,
+                                    "excerpt": excerpt,
+                                    "category": f"retry:{tool_name}"
+                                })
+                    elif tool_name in ("Write", "Edit", "MultiEdit"):
+                        target = inp.get("file_path", "") or inp.get("path", "")
+                        if (tool_name, target) in error_tool_results:
+                            prev_input, prev_line = last_tool_calls.get(tool_name, ("", 0))
+                            if inp != prev_input:
+                                excerpt = f"{tool_name} {target}"[:160]
+                                candidates.append({
+                                    "type": "retry-after-fail",
+                                    "line": line_num,
+                                    "excerpt": excerpt,
+                                    "category": f"retry:{tool_name}"
+                                })
+                    # Update last tool call
+                    if tool_name == "Bash":
+                        cmd = inp.get("command", "")
+                        if cmd:
+                            last_tool_calls[tool_name] = (cmd, line_num)
+                    else:
+                        last_tool_calls[tool_name] = (str(inp), line_num)
+
+        # 5. Decision signals: AskUserQuestion answers
+        if rec_type == "tool_result" or rec_type == "tool-result":
+            tool_name = d.get("tool") or d.get("name") or ""
+            if tool_name == "AskUserQuestion":
+                # The answer is in the result
+                answers = d.get("answers") or {}
+                if answers:
+                    choice = answers.get("choice") or answers.get("question") or "selected"
+                    excerpt = f"AskUserQuestion: {choice}"[:160]
+                    candidates.append({
+                        "type": "decision",
+                        "line": line_num,
+                        "excerpt": excerpt,
+                        "category": "user-decision"
+                    })
+
+        # 6. Schema errors: only an ERRORED tool result whose text is a validation failure.
+        for text in _errored_tool_results(d):
+            if not _is_schema_error(text):
+                continue
+            excerpt = text[:160].replace("\n", " ⏎ ")
+            candidates.append({
+                "type": "schema-error",
+                "line": line_num,
+                "excerpt": excerpt,
+                "category": "validation-error"
+            })
+
+        # 7. 0.13.13 (Task 1): user records carry the REAL tool results — pair each errored
+        #    tool_result block with its assistant tool_use by tool_use_id, and read an
+        #    answered AskUserQuestion from the same record's toolUseResult.
+        if rec_type == "user":
+            msg = d.get("message") or {}
+            cont = msg.get("content") if isinstance(msg, dict) else None
+            if isinstance(cont, list):
+                for blk in cont:
+                    if (isinstance(blk, dict) and blk.get("type") == "tool_result"
+                            and blk.get("is_error")):
+                        info = tool_uses.get(blk.get("tool_use_id"))
+                        if info:
+                            name, target, ikey = info
+                            if target:
+                                pending_fails.append({"tool": name, "target": target,
+                                                      "input_key": ikey, "call_no": call_no})
+            tr = d.get("toolUseResult")
+            if isinstance(tr, dict):
+                answers = tr.get("answers")
+                if isinstance(answers, dict) and answers:
+                    choice = "; ".join(f"{q} → {a}" for q, a in list(answers.items())[:3])
+                    candidates.append({
+                        "type": "decision",
+                        "line": line_num,
+                        "excerpt": f"AskUserQuestion: {choice}"[:160],
+                        "category": "user-decision",
+                    })
+            # 0.13.13 (Task 2): answers and annotation notes are USER text — feed them through
+            # the same correction pool (and dedupe set) as typed prompts.
+            for text in _answer_texts(d):
+                key = " ".join(text[:160].split())
+                if not key or key in seen_prompts:
+                    continue
+                seen_prompts.add(key)
+                if _is_correction_text(text):
+                    candidates.append({
+                        "type": "correction",
+                        "line": line_num,
+                        "excerpt": text[:160].replace("\n", " ⏎ "),
+                        "category": "answer-note",
+                    })
+
+        # 8. 0.13.13 (Task 4): guard-block — a hook/permission denial surfacing in an
+        #    ERRORED tool result, or a permission-rule denial record (user-rejected is the
+        #    user's own choice, not a guard lesson). Errored-only: a successful Read of a
+        #    playbook that documents the word BLOCKED is a quotation, not a denial (measured:
+        #    af94571f lines 124/331 are non-errored reads that match the bare pattern).
+        #    One candidate per record even when both fire.
+        guard_hit = False
+        for text, err in _tool_result_texts(d):
+            if err and _LESSON_GUARD_BLOCK.search(text):
+                candidates.append({
+                    "type": "guard-block",
+                    "line": line_num,
+                    "excerpt": text[:160].replace("\n", " ⏎ "),
+                    "category": "guard-block",
+                })
+                guard_hit = True
+                break
+        if not guard_hit and d.get("toolDenialKind") == "permission-rule":
+            candidates.append({
+                "type": "guard-block",
+                "line": line_num,
+                "excerpt": f"permission-rule denial ({d.get('toolName') or 'tool'})"[:160],
+                "category": "guard-block",
+            })
+
+    return candidates
+
+
+def _flatten(d):
+    """Everything a human would want to grep, as one string. Kept out of the digest path — this
+    runs only for records already known to match, so its cost is bounded by the hit count."""
+    parts = []
+    for key in ("lastPrompt", "content"):
+        v = d.get(key)
+        if isinstance(v, str):
+            parts.append(v)
+    msg = d.get("message") or {}
+    cont = msg.get("content")
+    if isinstance(cont, str):
+        parts.append(cont)
+    elif isinstance(cont, list):
+        for b in cont:
+            if not isinstance(b, dict):
+                continue
+            if b.get("type") == "text":
+                parts.append(str(b.get("text") or ""))
+            elif b.get("type") == "tool_use":
+                parts.append(f"[{b.get('name')}] {json.dumps(b.get('input') or {})[:2000]}")
+            elif b.get("type") == "thinking":
+                parts.append(str(b.get("thinking") or "")[:2000])
+    tr = d.get("toolUseResult")
+    if isinstance(tr, str):
+        parts.append(tr[:2000])
+    return "\n".join(p for p in parts if p)
+
+
+def lessons(paths):
+    """Mine deterministic lesson candidates from transcripts."""
+    all_candidates = []
+    recall_gaps = []   # 0.13.13 (Task 6): (transcript, n_writes) with 0 candidates near them
+    for path in paths:
+        scan = Scan(path).run()
+        candidates = _extract_lesson_candidates(scan)
+        for c in candidates:
+            c["transcript"] = os.path.basename(path)
+        all_candidates.extend(candidates)
+        writes = _lesson_shaped_write_lines(path)
+        near = [w for w in writes if any(abs(c["line"] - w) <= 50 for c in candidates)]
+        if writes and not near:
+            recall_gaps.append((os.path.basename(path), len(writes)))
+
+    # Count by type
+    counts = collections.Counter(c["type"] for c in all_candidates)
+    c_corr = counts.get("correction", 0)
+    c_retry = counts.get("retry-after-fail", 0)
+    c_dec = counts.get("decision", 0)
+    c_self = counts.get("self-correction", 0)
+    c_schema = counts.get("schema-error", 0)
+    c_guard = counts.get("guard-block", 0)
+    total = len(all_candidates)
+
+    # 0.13.6 (obs 0083/0050): a class zero is only a finding when the self-test corpus can
+    # fire that class — otherwise the honest answer is UNKNOWN, not 0.
+    certified = _self_test_certified_classes()
+    def cfmt(cls, n):
+        return str(n) if (n > 0 or cls in certified) else "UNKNOWN"
+
+    print(f"LESSON CANDIDATES ({total})")
+    if total == 0:
+        zeros = ", ".join(f"{label}={cfmt(cls, 0)}" for cls, label in (
+            ("correction", "corrections"), ("retry-after-fail", "retries"),
+            ("decision", "decisions"), ("self-correction", "self-corrections"),
+            ("schema-error", "schema-errors"), ("guard-block", "guard-blocks")))
+        print(f"  (none) — per-class zeros: {zeros}"
+              + ("" if certified else "  [no self-test corpus: every zero is UNKNOWN]"))
+        for name, n in recall_gaps:
+            print(f"\nGAPS — RECALL GAP: {name}: {n} lesson-shaped write(s), 0 candidates "
+                  "within ±50 records — harvest by hand")
+        return 0
+
+    # Summary line the main skill reads
+    print(f"lessons: {total} candidates ({cfmt('correction', c_corr)} corrections, {cfmt('retry-after-fail', c_retry)} retries, {cfmt('decision', c_dec)} decisions, {cfmt('self-correction', c_self)} self-corrections, {cfmt('schema-error', c_schema)} schema-errors, {cfmt('guard-block', c_guard)} guard-blocks)")
+
+    # Group by type for display
+    by_type = collections.defaultdict(list)
+    for c in all_candidates:
+        by_type[c["type"]].append(c)
+
+    for typ in ("correction", "retry-after-fail", "decision", "self-correction", "schema-error",
+                "guard-block"):
+        if typ not in by_type:
+            continue
+        print(f"\n  [{typ.upper()}]")
+        for c in by_type[typ][:MAX_PER_SECTION]:
+            print(f"    {c['transcript']}:{c['line']}  {c['excerpt']}")
+        if len(by_type[typ]) > MAX_PER_SECTION:
+            print(f"    … {len(by_type[typ]) - MAX_PER_SECTION} more")
+
+    # Final line for the main skill
+    if total > 0:
+        print(f"\n{total} lesson candidates found ({cfmt('correction', c_corr)} corrections, {cfmt('retry-after-fail', c_retry)} retries, {cfmt('decision', c_dec)} decisions, {cfmt('self-correction', c_self)} self-corrections, {cfmt('guard-block', c_guard)} guard-blocks) — run harvest-lessons? (~{total * 1.5:.0f}K budgeted)")
+
+    # 0.13.13 (Task 6): RECALL GAP under a GAPS header — the session wrote lesson-shaped
+    # durable records but the scanner found nothing near them.
+    for name, n in recall_gaps:
+        print(f"\nGAPS — RECALL GAP: {name}: {n} lesson-shaped write(s), 0 candidates "
+              "within ±50 records — harvest by hand")
+
+    return 0
+
+
+# --------------------------------------------------------------------------- cli
+
+
+def main(argv=None):
+    p = argparse.ArgumentParser(
+        prog="audit-scan.py",
+        description="✍️ Extract audit-relevant facts from Claude Code transcripts without loading "
+                    "them into context. Read-only.")
+    p.add_argument("file", nargs="*", help="explicit transcript path(s); overrides selection")
+    p.add_argument("--project", help="project dir under ~/.claude/projects (substring ok); "
+                                     "default is the one for $PWD")
+    p.add_argument("--all-projects", action="store_true")
+    p.add_argument("--session", help="session id or its prefix")
+    p.add_argument("--last", type=int, default=1, metavar="N",
+                   help="the N most recent transcripts by newest record timestamp, mtime when "
+                        "a file has none (default 1); warns on stderr if mtime disagrees")
+    p.add_argument("--since", metavar="YYYY-MM-DD", help="only transcripts modified on/after this")
+    p.add_argument("--exclude", action="append", default=[], metavar="SESSION_ID",
+                   help="skip a session id prefix — use it to exclude the CURRENT session, "
+                        "which has not finished and so cannot be reconciled yet")
+    p.add_argument("--list", action="store_true", help="list the selected transcripts and stop")
+    p.add_argument("--json", action="store_true", help="the full structured facts, unabridged")
+    p.add_argument("--quote", metavar="REGEX",
+                   help="print only records matching REGEX, with line addresses and a budget")
+    p.add_argument("--budget", type=int, default=DEFAULT_QUOTE_BUDGET,
+                   help=f"max chars --quote may emit (default {DEFAULT_QUOTE_BUDGET})")
+    p.add_argument("--lessons", action="store_true",
+                   help="mine deterministic lesson candidates from transcript (no LLM); user turns "
+                        "are read from last-prompt, user AND mid-turn queue-operation records, and "
+                        "a zero in a class the self-test corpus cannot fire prints UNKNOWN, not 0")
+    p.add_argument("--self-test", action="store_true",
+                   help="run the planted lessons corpus (text lines + lessons-scenarios/*.jsonl) "
+                        "through the classifier and exit non-zero unless ALL reported classes fire "
+                        "(a zero from a scanner that cannot fire is a broken instrument, not a "
+                        "finding)")
+    p.add_argument("--no-corpus-skip", action="store_true",
+                   help="with --self-test: a MISSING corpus is a failure instead of a loud skip")
+    p.add_argument("--repos-only", action="store_true",
+                   help="print one absolute repo path per line and exit 0 (for verify-state.py)")
+    args = p.parse_args(argv)
+
+    if args.self_test:
+        corpus = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                              "tests", "fixtures", "lessons-corpus.txt")
+        if not os.path.exists(corpus):
+            if args.no_corpus_skip:
+                print("self-test FAILED: corpus missing", file=sys.stderr)
+                return 1
+            print(f"self-test: SKIPPED -- corpus not found at {corpus} "
+                  "(pass --no-corpus-skip to make a missing corpus a failure)")
+            return 0
+        fired, misses, fired_classes = _self_test_corpus(corpus)
+        # 0.13.6: the corpus must fire EVERY reported class (text lines plus the scenario
+        # files) — a class it cannot fire makes --lessons print UNKNOWN instead of a zero,
+        # and that is exactly the gap that hid 4 of 6 corrections in session 717b9289.
+        for cls in _LESSON_ALL_CLASSES:
+            if cls not in fired_classes:
+                misses.append(f"class {cls!r} never fired — no corpus line or scenario covers it")
+        if misses:
+            print(f"self-test FAILED: {len(misses)} miss(es), {fired} line(s)/scenario(s) fired",
+                  file=sys.stderr)
+            for m in misses:
+                print(f"  {m}", file=sys.stderr)
+            return 1
+        print(f"self-test: ok -- {fired} corpus line(s)/scenario(s) fired across "
+              f"{len(fired_classes)} classes ({', '.join(sorted(fired_classes))})")
+        return 0
+
+    paths = find_transcripts(args)
+    if not paths:
+        print("no transcripts selected. Try --all-projects, --project <slug>, or pass a path.",
+              file=sys.stderr)
+        return 1
+
+    if args.list:
+        for f in paths:
+            print(f"{_mtime_date(f)}  {os.path.getsize(f)/1024:>8.0f} KB  {f}")
+        return 0
+
+    if args.quote:
+        return quote(paths, args.quote, args.budget)
+
+    if args.lessons:
+        return lessons(paths)
+
+    scans = [Scan(f).run() for f in paths]
+
+    if args.repos_only:
+        # Collect all repos from all scans and print one per line
+        all_repos = set()
+        for s in scans:
+            all_repos.update(s.repos)
+        for repo in sorted(all_repos):
+            print(repo)
+        return 0
+
+    if args.json:
+        print(json.dumps([{
+            "transcript": s.path, "bytes": s.bytes, "records": s.lines,
+            "unparseable": s.bad_lines, "unusable": s.odd_records,
+            "session_ids": sorted(s.session_ids), "first": s.first_ts, "last": s.last_ts,
+            "cwds": dict(s.cwds), "branches": dict(s.branches),
+            "versions": sorted(s.versions),
+            "files": {p: n for p, n in sorted(s.files.items())},
+            "repos": sorted(s.repos),
+            "surfaces": {p: classify(p) for p in sorted(s.files)},
+            "tools": dict(s.tools),
+            "commands": {k: _uniq(redact(condense(k, c)) for c in v) for k, v in s.cmds.items()},
+            "commands_raw": {k: _uniq(redact(c) for c in v) for k, v in s.cmds.items()},
+            "readonly_git": s.readonly_git, "readonly_automation": s.readonly_automation,
+            "tasks": s.tasks, "stop_reasons": dict(s.stop_reasons),
+            "api_errors": s.api_errors, "denials": dict(s.denials),
+            "plugins": sorted(s.plugins), "skills": sorted(s.skills),
+            "redaction": redaction_status(),
+        } for s in scans], indent=1))
+        return 0
+
+    print(report(scans, args))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

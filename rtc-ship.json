@@ -1,16 +1,11 @@
 {
   "_comment": "How rtc-ship.sh ships THIS repo (run-to-completion's bin/rtc-ship.sh). Data lives here; commands a repo needs live in .rtc/*.sh, opt-in by presence. Adding this file is config-only: no version bump, no release.",
-
   "tag_prefix": "v",
   "default_branch": "main",
-
   "manifest": ".claude-plugin/plugin.json",
   "changelog": "CHANGELOG.md",
   "_comment_tests": "Suites run in parallel (GNU parallel, grouped output, exit = number of failed jobs): 10.9s serial -> 6.9s, same verdict (2026-10-28).",
-  "test_cmd": "{ echo 'python3 tests/test_audit_scan.py'; for t in tests/test_*.sh; do echo \"bash $t\"; done; } | parallel --will-cite -j 12",
-
-
-
+  "test_cmd": "{ echo 'python3 tests/test_audit_scan.py'; for t in tests/test_*.sh; do echo \"bash $t\"; done; }  ; echo 'PY=\"$(command -v python3)\"; \"$PY\" -c \"import pytest\" 2>/dev/null || PY=\"$HOME/.local/pipx/venvs/pytest/bin/python\"; \"$PY\" -m pytest -q tests/test_portable.py' | parallel --will-cite -j 12",
   "refresh_plugin": "audit-loose-ends",
   "require_default_branch_checkout": true
 }
