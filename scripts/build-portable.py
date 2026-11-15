@@ -70,6 +70,12 @@ COPY_FILES = [
     "scripts/verify-paths.sh",
     "scripts/verify-state.py",
     "scripts/waypoint-reconcile.py",
+    "tests/fixtures/lessons-corpus.txt",
+    "tests/fixtures/lessons-scenarios/correction--answer-note.jsonl",
+    "tests/fixtures/lessons-scenarios/correction--queue-operation.jsonl",
+    "tests/fixtures/lessons-scenarios/decision--block-shape.jsonl",
+    "tests/fixtures/lessons-scenarios/decision.jsonl",
+    "tests/fixtures/lessons-scenarios/golden--recall-af94571f.jsonl",
 ]
 
 # component metadata per C2/C3 vocabulary (adaptation class / evidence level / surfaces)
@@ -96,13 +102,46 @@ COMPONENTS = [
      "adaptation_class": "native-unchanged", "evidence_level": "source-inspected",
      "surfaces": {"chat": False, "cowork": True, "code": True},
      "notes": "the end-of-task audit nudge; bash 3.2, stateless"},
-    {"path": "scripts/", "kind": "scanner-tools",
+    {"path": "scripts/audit-scan.py", "kind": "script",
      "adaptation_class": "native-unchanged", "evidence_level": "source-inspected",
-     "surfaces": {"chat": True, "cowork": True, "code": True},
-     "notes": "audit-scan.py, memory-index-audit.py (+ its reviewed-stamp data file), "
-              "observation-log.py, redact-secret.py, verify-paths.sh, verify-state.py, "
-              "waypoint-reconcile.py — stdlib-standalone, invoked via "
-              "${CLAUDE_PLUGIN_ROOT}/scripts/ from the skills"},
+     "surfaces": {"chat": False, "cowork": True, "code": True},
+     "notes": "the session-change scanner; needs a local shell/python runtime (Chat has "
+              "neither — chat:false). Its --self-test/--lessons zero-certification reads "
+              "tests/fixtures/ (shipped, see the fixture components)"},
+    {"path": "scripts/memory-index-audit.py", "kind": "script",
+     "adaptation_class": "native-unchanged", "evidence_level": "source-inspected",
+     "surfaces": {"chat": False, "cowork": True, "code": True},
+     "notes": "memory-index guard; reads scripts/memory-index-reviewed.txt (shipped)"},
+    {"path": "scripts/memory-index-reviewed.txt", "kind": "data",
+     "adaptation_class": "native-unchanged", "evidence_level": "source-inspected",
+     "surfaces": {"chat": False, "cowork": True, "code": True},
+     "notes": "data stamp for memory-index-audit.py, not a tool"},
+    {"path": "scripts/observation-log.py", "kind": "script",
+     "adaptation_class": "native-unchanged", "evidence_level": "source-inspected",
+     "surfaces": {"chat": False, "cowork": True, "code": True},
+     "notes": "task-observer log resolver"},
+    {"path": "scripts/redact-secret.py", "kind": "script",
+     "adaptation_class": "native-unchanged", "evidence_level": "source-inspected",
+     "surfaces": {"chat": False, "cowork": True, "code": True},
+     "notes": "secret-scan gate; sibling-resolved paths, portable-safe"},
+    {"path": "scripts/verify-paths.sh", "kind": "script",
+     "adaptation_class": "native-unchanged", "evidence_level": "source-inspected",
+     "surfaces": {"chat": False, "cowork": True, "code": True},
+     "notes": "path-closure verifier"},
+    {"path": "scripts/verify-state.py", "kind": "script",
+     "adaptation_class": "native-unchanged", "evidence_level": "source-inspected",
+     "surfaces": {"chat": False, "cowork": True, "code": True},
+     "notes": "state-ownership verifier"},
+    {"path": "scripts/waypoint-reconcile.py", "kind": "script",
+     "adaptation_class": "native-unchanged", "evidence_level": "source-inspected",
+     "surfaces": {"chat": False, "cowork": True, "code": True},
+     "notes": "waypoint reconciliation helper"},
+    {"path": "tests/fixtures/", "kind": "data",
+     "adaptation_class": "native-unchanged", "evidence_level": "source-inspected",
+     "surfaces": {"chat": False, "cowork": True, "code": True},
+     "notes": "the lessons corpus + scenario fixtures audit-scan.py's --self-test and "
+              "--lessons zero-certification read at scripts/../tests/fixtures/ (shipped so "
+              "the capability survives the package boundary)"},
 ]
 
 
@@ -172,10 +211,19 @@ def write_build_json(dest, root, commit_override):
         f.write(json.dumps(doc, indent=2, sort_keys=True) + "\n")
 
 
+IGNORE_DIRS = {"__pycache__", ".pytest_cache", ".git"}
+IGNORE_SUFFIXES = (".pyc", ".pyo")
+
+
 def walk_files(root):
+    """Package files only — runtime litter (__pycache__ bytecode written when a shipped
+    script runs from inside portable/) is never part of the package or the diff."""
     out = {}
-    for dirpath, _dn, filenames in os.walk(root):
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if d not in IGNORE_DIRS]
         for fn in sorted(filenames):
+            if fn.endswith(IGNORE_SUFFIXES):
+                continue
             p = os.path.join(dirpath, fn)
             out[os.path.relpath(p, root).replace(os.sep, "/")] = p
     return out

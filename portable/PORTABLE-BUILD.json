@@ -65,11 +65,107 @@
     {
       "adaptation_class": "native-unchanged",
       "evidence_level": "source-inspected",
-      "kind": "scanner-tools",
-      "notes": "audit-scan.py, memory-index-audit.py (+ its reviewed-stamp data file), observation-log.py, redact-secret.py, verify-paths.sh, verify-state.py, waypoint-reconcile.py \u2014 stdlib-standalone, invoked via ${CLAUDE_PLUGIN_ROOT}/scripts/ from the skills",
-      "path": "scripts/",
+      "kind": "script",
+      "notes": "the session-change scanner; needs a local shell/python runtime (Chat has neither \u2014 chat:false). Its --self-test/--lessons zero-certification reads tests/fixtures/ (shipped, see the fixture components)",
+      "path": "scripts/audit-scan.py",
       "surfaces": {
-        "chat": true,
+        "chat": false,
+        "code": true,
+        "cowork": true
+      }
+    },
+    {
+      "adaptation_class": "native-unchanged",
+      "evidence_level": "source-inspected",
+      "kind": "script",
+      "notes": "memory-index guard; reads scripts/memory-index-reviewed.txt (shipped)",
+      "path": "scripts/memory-index-audit.py",
+      "surfaces": {
+        "chat": false,
+        "code": true,
+        "cowork": true
+      }
+    },
+    {
+      "adaptation_class": "native-unchanged",
+      "evidence_level": "source-inspected",
+      "kind": "data",
+      "notes": "data stamp for memory-index-audit.py, not a tool",
+      "path": "scripts/memory-index-reviewed.txt",
+      "surfaces": {
+        "chat": false,
+        "code": true,
+        "cowork": true
+      }
+    },
+    {
+      "adaptation_class": "native-unchanged",
+      "evidence_level": "source-inspected",
+      "kind": "script",
+      "notes": "task-observer log resolver",
+      "path": "scripts/observation-log.py",
+      "surfaces": {
+        "chat": false,
+        "code": true,
+        "cowork": true
+      }
+    },
+    {
+      "adaptation_class": "native-unchanged",
+      "evidence_level": "source-inspected",
+      "kind": "script",
+      "notes": "secret-scan gate; sibling-resolved paths, portable-safe",
+      "path": "scripts/redact-secret.py",
+      "surfaces": {
+        "chat": false,
+        "code": true,
+        "cowork": true
+      }
+    },
+    {
+      "adaptation_class": "native-unchanged",
+      "evidence_level": "source-inspected",
+      "kind": "script",
+      "notes": "path-closure verifier",
+      "path": "scripts/verify-paths.sh",
+      "surfaces": {
+        "chat": false,
+        "code": true,
+        "cowork": true
+      }
+    },
+    {
+      "adaptation_class": "native-unchanged",
+      "evidence_level": "source-inspected",
+      "kind": "script",
+      "notes": "state-ownership verifier",
+      "path": "scripts/verify-state.py",
+      "surfaces": {
+        "chat": false,
+        "code": true,
+        "cowork": true
+      }
+    },
+    {
+      "adaptation_class": "native-unchanged",
+      "evidence_level": "source-inspected",
+      "kind": "script",
+      "notes": "waypoint reconciliation helper",
+      "path": "scripts/waypoint-reconcile.py",
+      "surfaces": {
+        "chat": false,
+        "code": true,
+        "cowork": true
+      }
+    },
+    {
+      "adaptation_class": "native-unchanged",
+      "evidence_level": "source-inspected",
+      "kind": "data",
+      "notes": "the lessons corpus + scenario fixtures audit-scan.py's --self-test and --lessons zero-certification read at scripts/../tests/fixtures/ (shipped so the capability survives the package boundary)",
+      "path": "tests/fixtures/",
+      "surfaces": {
+        "chat": false,
         "code": true,
         "cowork": true
       }
@@ -88,10 +184,16 @@
     "scripts/verify-state.py": "ec3cc3848714921919a6fd699406205374bfc3afda17d958c8d12dde13cdf52e",
     "scripts/waypoint-reconcile.py": "b9fe3e7c0e1c85d5ef8bec08921ab7777f9daccbd0ae22e9af8895ee81436ddc",
     "skills/audit-loose-ends/SKILL.md": "3c8dc7079f2006e90fe94d91893963f1ed2814058048310c8ebdb737b88b9de3",
-    "skills/harvest-lessons/SKILL.md": "b48826f15e5ae456440d928ca0b42df145b7e4a9d3b654d32b40600a58d4af28"
+    "skills/harvest-lessons/SKILL.md": "b48826f15e5ae456440d928ca0b42df145b7e4a9d3b654d32b40600a58d4af28",
+    "tests/fixtures/lessons-corpus.txt": "74db0cb9fdd0becbb884f2be6482d4c34807d62459c66346660bd5dcb9c8b1a3",
+    "tests/fixtures/lessons-scenarios/correction--answer-note.jsonl": "cd22629cabb366dc7d6c6a266b12a68c3717f80878534522cb92023ca65a1d21",
+    "tests/fixtures/lessons-scenarios/correction--queue-operation.jsonl": "5a50711e427470939a7eed8f0b75f824b42621a00e9323fa9bf8630c822164f6",
+    "tests/fixtures/lessons-scenarios/decision--block-shape.jsonl": "b67596edd060e8e2427055def720c8615e9ba72de2ce1fac73b99b5d34eb81f7",
+    "tests/fixtures/lessons-scenarios/decision.jsonl": "481f86153153f0c3c7185139ef388483af0c1963c857133ec196f500629b2ae1",
+    "tests/fixtures/lessons-scenarios/golden--recall-af94571f.jsonl": "c3ae405d513ee9630facc5563657886b0fc1e9762887c2d46861a0371bf8c1f8"
   },
   "schema": "haiggoh-portable-build/1",
-  "source_commit": "7f9e7d6c2b3dd5e6ac1fac7c28b3f6a44b5c7770",
+  "source_commit": "b1cdaadd302a24c67179b54c9318a1b85737a131",
   "source_repo": "haiggoh/audit-loose-ends",
   "transform_version": "1"
 }

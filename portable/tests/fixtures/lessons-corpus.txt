@@ -1,0 +1,63 @@
+#!audit-scan-lessons-corpus v1
+#
+# The lessons corpus for audit-scan.py --self-test. Each MUST line must fire its named
+# class through the SAME predicates the scanner runs; each MUSTNOT must fire nothing.
+# The magic first line declares this file test data, so the durable-write scanner
+# reports it as SKIPPED rather than auditing it -- visibly, never silently excluded.
+#
+# Why this exists (obs 0050): a deterministic scanner's zero is only a finding when the
+# scanner can be shown to fire. A class whose vocabulary rots must turn --self-test
+# non-zero, so "0 candidates" cannot masquerade as "no lessons happened".
+#
+# Format: "MUST <class> :: <text>" / "MUSTNOT :: <text>"; blank lines and # ignored.
+MUST correction :: no, that's wrong - the flag is --all, not --verbose
+MUST correction :: why did you write to the installed copy instead of the source repo
+MUST self-correction :: my assumption was wrong: the fixture already included the catch-all, so the assertion double-counted it
+MUST self-correction :: it turned out I misread the schema and the id had to be a string
+MUST schema-error :: expected string, got int
+MUST schema-error :: InputValidationError: expected array, provided null
+MUSTNOT :: ran the suite in parallel: 1043 passed, 113 skipped, budget reset at midnight
+MUSTNOT :: the marker file was refreshed and the digest matches the published manifest
+#
+# 0.13.6 (obs 0083 / waypoint audit-loose-ends-sharpen): advice- and clarity-shaped user turns
+# carry the same correction signal as contradiction-shaped ones. Mid-turn messages arrive as
+# queue-operation records, not last-prompt records — see lessons-scenarios/.
+MUST correction :: we need to make sure the scripts don't error or fail when the waypoints store is missing
+MUST correction :: check-code should not rely on users knowing the verb lint in its description
+MUST correction :: neither session's work should be dismissed outright
+MUST correction :: the description should either not mention waypoints or add a caveat such as "(if installed)"
+MUST correction :: I'm sorry what exactly are we talking about here? please inform me
+# 0.13.10 (obs 0084): the shapes that were missed on session 4bc80515
+MUST correction :: any pre-existing test failure can not be ignored — it has to be resolved before each release
+MUST correction :: cross-references we put there for a reason should survive the trim
+MUST correction :: you should regularly call other agents to review your work
+MUST correction :: please re-check the diff and reconcile old vs new before shipping
+MUSTNOT :: we should probably bump the version before writing the changelog entry
+MUSTNOT :: the harness re-records the latest prompt on many later lines
+MUSTNOT :: we discussed the build plan already, moving on to the release
+#
+# 0.13.13 (Task 2, obs 0098 recurrence 2026-11-08): the menu-survey correction lived in an
+# AskUserQuestion answer's notes — "look again" is a redirect shape even without no/wrong.
+MUST correction :: look again, several of those do have interactive menus
+#
+# 0.13.13 (Task 3, waypoint 0098/0070): the GATE in front of the correction predicate —
+# skill-injection bodies, pasted-output turns, and harvester self-quotation are MUSTNOTs
+# even when the raw vocabulary would fire (the second one starts with "no," and would).
+MUSTNOT :: ⏺ Edit a.py ✻ Compiling ───────── ❯ a pasted harness transcript full of box-drawing lines
+MUSTNOT :: no wait, the _LESSON_ADVICE pattern is built with re.compile( inside the harvester
+#
+# 0.13.13 (Task 3, waypoint 0087): partial agreement is a correction shape
+MUST correction :: I agree with everything except the retention window
+MUST correction :: except for the changelog, the release notes are ready
+MUST correction :: I'd much rather we kept the old flag name
+MUSTNOT :: the release shipped on schedule, no exceptions noted
+#
+# 0.13.13 (Task 5, waypoint 0098 leads + obs 0100 "a check that cannot fail"): widened
+# self-correction vocabulary. Every MUST pairs a reversal with an owned failure; the
+# MUSTNOT twins carry a reversal word but no owned failure and must stay silent.
+MUST self-correction :: That landed on the wrong waypoint — moving it to the right item now
+MUST self-correction :: that's my bug: the cause was the stale cache
+MUST self-correction :: our earlier result was a false positive, re-extract with the fixed parser
+MUST self-correction :: it looks wrong — the check could not have failed, the port was already true before launch
+MUSTNOT :: see the root cause analysis section of the README for background
+MUSTNOT :: the nightly build re-extracts the table from the warehouse

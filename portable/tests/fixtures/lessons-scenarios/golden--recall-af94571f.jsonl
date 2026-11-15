@@ -1,0 +1,21 @@
+#!lessons-scenario golden--recall-af94571f -- SYNTHETIC replay of the 5 real lesson shapes and 2 false-positive shapes from session af94571f (no real transcript text copied; neutral placeholder paths). --self-test asserts >=4/5 GOLD-L* markers fire with the right class and both GOLDFP* markers stay silent.
+# L1: a validator tool error, then a changed approach on the same target (expect retry-after-fail)
+{"type": "assistant", "timestamp": "2026-11-09T04:00:00Z", "sessionId": "golden", "message": {"content": [{"type": "tool_use", "id": "g1", "name": "Bash", "input": {"command": "python3 tools/GOLD-L1-validate.py --out x"}}]}}
+{"type": "user", "timestamp": "2026-11-09T04:00:01Z", "sessionId": "golden", "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "g1", "is_error": true, "content": "Traceback (most recent call last):\nAttributeError: 'dict' object has no attribute 'content'"}]}}
+{"type": "assistant", "timestamp": "2026-11-09T04:00:02Z", "sessionId": "golden", "message": {"content": [{"type": "tool_use", "id": "g2", "name": "Bash", "input": {"command": "python3 tools/GOLD-L1-validate.py --envelope full --out x"}}]}}
+# L2: git commit "nothing staged", then a retry with the staged path (expect retry-after-fail)
+{"type": "assistant", "timestamp": "2026-11-09T04:00:03Z", "sessionId": "golden", "message": {"content": [{"type": "tool_use", "id": "g3", "name": "Bash", "input": {"command": "git commit -m GOLD-L2 wip"}}]}}
+{"type": "user", "timestamp": "2026-11-09T04:00:04Z", "sessionId": "golden", "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "g3", "is_error": true, "content": "Exit code 1\nnothing added to commit but untracked files present"}]}}
+{"type": "assistant", "timestamp": "2026-11-09T04:00:05Z", "sessionId": "golden", "message": {"content": [{"type": "tool_use", "id": "g4", "name": "Bash", "input": {"command": "git commit -m GOLD-L2 wip -- src/Case.py"}}]}}
+# L3: a PreToolUse hook BLOCK (expect guard-block)
+{"type": "assistant", "timestamp": "2026-11-09T04:00:06Z", "sessionId": "golden", "message": {"content": [{"type": "tool_use", "id": "g5", "name": "Bash", "input": {"command": "rm -rf GOLD-L3-target"}}]}}
+{"type": "user", "timestamp": "2026-11-09T04:00:07Z", "sessionId": "golden", "toolDenialKind": "permission-rule", "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "g5", "is_error": true, "content": "PreToolUse:Bash hook error: watch-your-step: BLOCKED — destructive command GOLD-L3"}]}}
+# L4: the self-correction prose (expect self-correction)
+{"type": "assistant", "timestamp": "2026-11-09T04:00:08Z", "sessionId": "golden", "message": {"content": [{"type": "text", "text": "That landed on the wrong item GOLD-L4. The search returned the wrong id first; I'll move the point."}]}}
+# L5: an answered AskUserQuestion (expect decision)
+{"type": "assistant", "timestamp": "2026-11-09T04:00:09Z", "sessionId": "golden", "message": {"content": [{"type": "tool_use", "id": "g9", "name": "AskUserQuestion", "input": {"questions": [{"question": "Which release carries GOLD-L5?", "options": [{"label": "0.13.13"}, {"label": "0.13.14"}]}]}}]}}
+{"type": "user", "timestamp": "2026-11-09T04:00:10Z", "sessionId": "golden", "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "g9", "content": "Your questions have been answered."}]}, "toolUseResult": {"questions": [{"question": "Which release carries GOLD-L5?"}], "answers": {"Which release carries GOLD-L5?": "0.13.13"}, "annotations": {}}}
+# FP1: a pasted transcript tail as user text (af94571f line-25 shape) — must stay silent
+{"type": "user", "timestamp": "2026-11-09T04:00:11Z", "sessionId": "golden", "message": {"role": "user", "content": [{"type": "text", "text": "GOLDFP1 resume the session that ended like this:\n  - no, the error body was truncated to [{, and I\n    won't guess at it.\n  ❯ what's running now\n  ─────────"}]}}
+# FP2: an injected skill body as user text (af94571f line-511 shape) — must stay silent
+{"type": "user", "timestamp": "2026-11-09T04:00:12Z", "sessionId": "golden", "message": {"role": "user", "content": [{"type": "text", "text": "Base directory for this skill: /x/skills/GOLDFP2\n# Skill body\nwe need to make sure the test fires first"}]}}

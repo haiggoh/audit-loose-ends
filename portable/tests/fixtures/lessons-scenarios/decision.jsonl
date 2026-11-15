@@ -1,0 +1,2 @@
+#!lessons-scenario decision -- an answered AskUserQuestion is a user decision
+{"type": "tool_result", "timestamp": "2026-10-31T11:00:00Z", "sessionId": "scen", "tool": "AskUserQuestion", "answers": {"choice": "Option A", "question": "Which approach?"}}
