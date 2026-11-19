@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.13.17] — 2026-11-20
+
+### Added — a closing report step: serve the loose ends, don't ask for them
+
+- `skills/audit-loose-ends/SKILL.md` gains a **Closing report — serve the loose ends** section:
+  after the reconciliation the agent serves the user the session's loose ends — deferred minors,
+  open tasks and follow-ups, each with its durable home (waypoint / memory / ledger line),
+  including anything noticed in passing but deliberately parked — and what it suggests doing next
+  for each. An "all loops closed" claim is allowed only with named receipts (tests run, repos
+  clean, store reconciled, secrets clean). Asking the user *what* is left is the wrong shape:
+  tracking and serving them is the skill's job; the wrap signal is the user's half of the exchange.
+- `tests/test_skill.sh`: 5 new assertions pin the section, the serve-not-ask framing, the parked
+  findings, and the receipts requirement. Content-only change — skill body 1499/1500 words.
+
 ## [0.13.16] — 2026-11-15
 
 ### Added — Phase 3 Wave A: committed portable package (COORDINATION C1/C2)

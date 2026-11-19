@@ -172,7 +172,7 @@
     }
   ],
   "files": {
-    ".claude-plugin/plugin.json": "90b210b7196186c4111b2c388f15be9d899e8371e23535c78f14bca5b25ad4ba",
+    ".claude-plugin/plugin.json": "bc7b0588a284985598bb511bec719f206b6c4ff67d4144215ea579034eaf1fbd",
     "hooks/hooks.json": "c8934e1793d3f85e66ef7a45ccdc645f551421bd75384c2b33b28e723baf4588",
     "hooks/nudge.sh": "cf1d2b7d67c7609d0295dc1b9c89b6b390dab17dae38106ac123726713e3d852",
     "scripts/audit-scan.py": "b3276d0e094b327b03bdbc800b66aa28d6a91db730bb6130b95fd3cff87ed626",
@@ -183,7 +183,7 @@
     "scripts/verify-paths.sh": "8e0c90af98ce4d90c2375a45a1a68153078c8757f5e2c467bdc7a49fc22b8d12",
     "scripts/verify-state.py": "ec3cc3848714921919a6fd699406205374bfc3afda17d958c8d12dde13cdf52e",
     "scripts/waypoint-reconcile.py": "b9fe3e7c0e1c85d5ef8bec08921ab7777f9daccbd0ae22e9af8895ee81436ddc",
-    "skills/audit-loose-ends/SKILL.md": "3c8dc7079f2006e90fe94d91893963f1ed2814058048310c8ebdb737b88b9de3",
+    "skills/audit-loose-ends/SKILL.md": "b58d4d84406fe64629b11ff6b768a66db57a8a6fc53ceec3fa40d8d181363caa",
     "skills/harvest-lessons/SKILL.md": "b48826f15e5ae456440d928ca0b42df145b7e4a9d3b654d32b40600a58d4af28",
     "tests/fixtures/lessons-corpus.txt": "74db0cb9fdd0becbb884f2be6482d4c34807d62459c66346660bd5dcb9c8b1a3",
     "tests/fixtures/lessons-scenarios/correction--answer-note.jsonl": "cd22629cabb366dc7d6c6a266b12a68c3717f80878534522cb92023ca65a1d21",
@@ -193,7 +193,7 @@
     "tests/fixtures/lessons-scenarios/golden--recall-af94571f.jsonl": "c3ae405d513ee9630facc5563657886b0fc1e9762887c2d46861a0371bf8c1f8"
   },
   "schema": "haiggoh-portable-build/1",
-  "source_commit": "b1cdaadd302a24c67179b54c9318a1b85737a131",
+  "source_commit": "2ea856d7a042eb755b0f5e57fc62f75c58f935dd",
   "source_repo": "haiggoh/audit-loose-ends",
   "transform_version": "1"
 }

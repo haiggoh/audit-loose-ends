@@ -149,6 +149,14 @@ Mark it done **in whichever surface holds it** — flip the memory's flag, tick 
 `waypoints.py done <id> --evidence "commit <sha>, tests N/N"` (or `--no-evidence "superseded by <id>"`).
 Never leave the same completion recorded as open in one place and done in another.
 
+## Closing report — serve the loose ends
+
+End by serving the user the loose ends, not asking for them: deferred minors, open tasks and
+follow-ups the audit found, each with its durable home (waypoint / memory / ledger line),
+including anything noticed in passing but deliberately parked — and what you'd suggest next for
+each. If none remain, say the loops are closed only with the receipts that prove it (tests run,
+repos clean, store reconciled, secrets clean) — name them. Record anything the user adds here.
+
 ## Branding (✍️)
 
 Lead the first substantive reply after `/audit-loose-ends` (or `/harvest-lessons`) with
