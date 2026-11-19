@@ -67,4 +67,11 @@ has "still documents the archive"  'waypoints.py archive list'
 grep -qi 'never hand-edit\|Do NOT substitute a hand-edit' "$SKILL"
 check $? "still forbids hand-editing the store"
 
+# --- the closing report (0.13.17): serve the loose ends, don't ask the user for them ---
+grep -qi 'closing report' "$SKILL";       check $? "has a closing-report section"
+has "serves the loose ends"               'serve the loose ends'
+grep -qi 'not asking' "$SKILL";           check $? "presents the list instead of asking the user for it"
+grep -qi 'deliberately parked' "$SKILL";  check $? "covers noticed-but-parked findings, not only tracked tasks"
+grep -qi 'receipts' "$SKILL";             check $? "an all-clear is allowed only with named receipts"
+
 [ "$fail" = 0 ] && echo "ALL PASS" || { echo "FAILURES"; exit 1; }
