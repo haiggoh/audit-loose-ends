@@ -53,5 +53,17 @@ if [ -n "$TASK_OBSERVER_SKILL" ] && [ -z "$TASK_OBSERVER_HAS_HOOK" ]; then
   NUDGE="${NUDGE} Also: invoke task-observer before your first substantive tool use (it logs corrections, gaps and methodology worth turning into reusable skills — proposals for review, never authoritative state)."
 fi
 
+# 🧠 knowledge block: run-5 §C memories migrated from the MEMORY.md index (2026-11-25,
+# plan 2026-11-25-memory-plugin-primer Task 2) — one line per memory, literal trigger
+# vocabulary preserved; pinned by tests/test_memory_primers_20261125.sh on both lanes.
+NUDGE="${NUDGE}
+🧠 knowledge (migrated from the memory index, 2026-11-25):
+- Doc trims to a budget are deletion reviews: red/green diff, map every removed paragraph to its new home, independent different-family review BEFORE shipping.
+- Trigger vocabulary (error strings, flags, commands) survives trims — word-diff the whole doc; a budget yields to correctness.
+- Dumping a config/credential file: key NAMES for everything, VALUES only on an explicit safe allowlist — a denylist regex leaks (pass$ missed password).
+- On a leak: say so at once in the next reply, name the credential, recommend rotation.
+- Verify by OUTCOME, never 'no error': WORKS/PARTIAL/BROKEN/INCONCLUSIVE, before→after snapshot, independent read.
+- A NEGATIVE result needs a planted positive; a green test never seen red proves nothing — mutation-test the check."
+
 printf '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"%s"}}\n' \
   "$(json_escape "$NUDGE")"

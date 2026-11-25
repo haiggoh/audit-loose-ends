@@ -172,9 +172,9 @@
     }
   ],
   "files": {
-    ".claude-plugin/plugin.json": "bc7b0588a284985598bb511bec719f206b6c4ff67d4144215ea579034eaf1fbd",
+    ".claude-plugin/plugin.json": "de28ed43543e2cf0e668a05b258758f057bef95747bcad834b6e21744abc7a92",
     "hooks/hooks.json": "c8934e1793d3f85e66ef7a45ccdc645f551421bd75384c2b33b28e723baf4588",
-    "hooks/nudge.sh": "cf1d2b7d67c7609d0295dc1b9c89b6b390dab17dae38106ac123726713e3d852",
+    "hooks/nudge.sh": "dc714cba670a584040a1e3f1617b8ccf60ddb2545fb0db1e9f5c4cc6a3a65812",
     "scripts/audit-scan.py": "b3276d0e094b327b03bdbc800b66aa28d6a91db730bb6130b95fd3cff87ed626",
     "scripts/memory-index-audit.py": "ab24846b95c1a51dd4dbf00a60d9e6ffa4003dbf42189f6c6530b0798c30a11a",
     "scripts/memory-index-reviewed.txt": "1ddc10ba369ed50c6547634b6baf9bdbf131dc4c2293c4dc680b5dda3b117734",
@@ -193,7 +193,7 @@
     "tests/fixtures/lessons-scenarios/golden--recall-af94571f.jsonl": "c3ae405d513ee9630facc5563657886b0fc1e9762887c2d46861a0371bf8c1f8"
   },
   "schema": "haiggoh-portable-build/1",
-  "source_commit": "2ea856d7a042eb755b0f5e57fc62f75c58f935dd",
+  "source_commit": "7a4d6bdb124471ac1b1caddc6a8d0e6cb05fad74",
   "source_repo": "haiggoh/audit-loose-ends",
   "transform_version": "1"
 }

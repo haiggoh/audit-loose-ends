@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.13.18] — 2026-11-25
+
+### Added — 🧠 knowledge block in the SessionStart nudge (run-5 §C migration, plan 2026-11-25-memory-plugin-primer Task 2)
+- `hooks/nudge.sh` appends a compact knowledge block to the model-only `additionalContext`:
+  doc trims are deletion reviews (red/green diff, map every removed paragraph to its new home,
+  independent different-family review BEFORE shipping, trigger vocabulary survives,
+  word-diff the whole doc; a budget yields to correctness); dumping a config/credential file
+  prints key NAMES for all keys and VALUES only on an explicit safe allowlist — a denylist
+  regex leaks (`pass$` missed `password`), and on a leak say so, name the credential,
+  recommend rotation; verify by OUTCOME, never "no error" (WORKS/PARTIAL/BROKEN/INCONCLUSIVE,
+  before→after snapshot, independent read), a NEGATIVE needs a planted positive, and a green
+  test never seen red proves nothing — mutation-test it.
+- New `tests/test_memory_primers_20261125.sh` pins each line's trigger tokens in the nudge
+  output on both lanes (localhost proxy + gateway base URL). RED before the block landed;
+  mutation-checked (remove one line → red, restore byte-identical → green).
+
 ## [0.13.17] — 2026-11-20
 
 ### Added — a closing report step: serve the loose ends, don't ask for them
